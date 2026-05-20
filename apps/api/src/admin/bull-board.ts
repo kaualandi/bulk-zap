@@ -1,8 +1,10 @@
 import { createBullBoard } from "@bull-board/api";
 import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
-import { ExpressAdapter } from "@bull-board/express";
-import express from "express";
-import basicAuth from "express-basic-auth";
+import { HonoAdapter } from "@bull-board/hono";
+import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
+import { serveStatic } from "hono/bun";
+import { trimTrailingSlash } from "hono/trailing-slash";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import {
@@ -11,16 +13,20 @@ import {
   warmupCheckQueue,
 } from "../jobs/queue.js";
 
-export function startBullBoard(): void {
+const BASE_PATH = "/admin/queues";
+
+export type BullBoardApp = Hono | null;
+
+export function createBullBoardApp(): BullBoardApp {
   if (!env.BULL_BOARD_USER || !env.BULL_BOARD_PASS) {
     logger.warn(
-      "Bull Board disabled: defina BULL_BOARD_USER e BULL_BOARD_PASS no .env"
+      "Bull Board desativado: defina BULL_BOARD_USER e BULL_BOARD_PASS no .env"
     );
-    return;
+    return null;
   }
 
-  const serverAdapter = new ExpressAdapter();
-  serverAdapter.setBasePath("/admin/queues");
+  const serverAdapter = new HonoAdapter(serveStatic);
+  serverAdapter.setBasePath(BASE_PATH);
 
   createBullBoard({
     queues: [
@@ -29,26 +35,31 @@ export function startBullBoard(): void {
       new BullMQAdapter(classifyInboundQueue),
     ],
     serverAdapter,
+    options: {
+      uiConfig: {
+        boardTitle: "BulkZap — Filas",
+        locale: { lng: "pt-BR" },
+      },
+    },
   });
 
-  const app = express();
+  const inner = serverAdapter.registerPlugin();
+
+  // Wrapper: aplica basic auth + monta o inner Hono no path completo,
+  // assim ele recebe a URL com `/admin/queues/...` e o adapter consegue
+  // resolver os assets estáticos corretamente.
+  const app = new Hono();
+  app.use(trimTrailingSlash());
   app.use(
-    "/admin/queues",
+    `${BASE_PATH}/*`,
     basicAuth({
-      users: { [env.BULL_BOARD_USER]: env.BULL_BOARD_PASS },
-      challenge: true,
+      username: env.BULL_BOARD_USER,
+      password: env.BULL_BOARD_PASS,
       realm: "BulkZap Bull Board",
-    }),
-    serverAdapter.getRouter()
+    })
   );
+  app.route(BASE_PATH, inner);
 
-  app.get("/", (_req, res) => {
-    res.redirect("/admin/queues");
-  });
-
-  app.listen(env.BULL_BOARD_PORT, () => {
-    logger.info(
-      `📊 Bull Board em http://localhost:${env.BULL_BOARD_PORT}/admin/queues`
-    );
-  });
+  logger.info(`📊 Bull Board montado em ${BASE_PATH}`);
+  return app;
 }

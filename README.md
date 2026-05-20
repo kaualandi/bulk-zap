@@ -62,6 +62,7 @@ bun run dev
 
 - API: http://localhost:3000 (health: `/health`)
 - Web: http://localhost:3001
+- Bull Board (filas BullMQ): http://localhost:3000/admin/queues — protegido por basic auth (`BULL_BOARD_USER` / `BULL_BOARD_PASS` no `.env`). Se essas vars estiverem vazias, o painel **não sobe**.
 
 ## Golden path (cenário do cliente real)
 

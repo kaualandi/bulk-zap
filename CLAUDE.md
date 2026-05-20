@@ -27,6 +27,7 @@ Plano completo: `/Users/kaualandi/.claude/plans/vamos-l-preciso-da-steady-sonnet
 | Cloud API | fetch direto pro Graph API | Adapter `cloud-api-driver.ts` |
 | Email | Resend | Para alertas de ban/desconexão |
 | IA | Anthropic SDK (Haiku 4.5 + Sonnet 4.6) | Tudo opt-in via `ANTHROPIC_API_KEY` |
+| Admin filas | Bull Board (Hono adapter) | Montado em `/admin/queues` com basic auth |
 | Deploy | 1 EC2 + PM2 | **Sem Docker em prod** — apps rodam nativo |
 
 ## Estrutura
@@ -64,6 +65,7 @@ bun run dev                              # turborepo: api (3000) + web (3001)
 Acessos:
 - API: http://localhost:3000 (health: `/health`, IA health: `/ai/health`)
 - Web: http://localhost:3001
+- Bull Board (filas): http://localhost:3000/admin/queues (basic auth via `BULL_BOARD_USER`/`BULL_BOARD_PASS`)
 
 ## Comandos essenciais
 
@@ -135,7 +137,15 @@ Endpoint `/accounts/:id/events` (Elysia `.ws()`). Front escuta e renderiza o QR 
 
 `wsSubscriptions` map em `routes/accounts.ts` mantém unsubscribe handlers.
 
-### 7. IA opt-in com failsafe
+### 7. Bull Board montado dentro do Elysia (Hono adapter)
+
+Bull Board não tem adapter Elysia oficial. Solução: usar `@bull-board/hono`, criar outer Hono que monta o inner com `app.route(BASE_PATH, inner)` (preserva o prefix nas rotas internas), aplicar `basicAuth()` e `trimTrailingSlash()`. No `index.ts`, rotear via `app.all("/admin/queues", ...)` e `app.all("/admin/queues/*", ...)` — **não** usar `.mount()` porque ele faz strip do prefix e quebra o resolução de assets estáticos do Bull Board.
+
+Se `BULL_BOARD_USER` e `BULL_BOARD_PASS` estão vazios, `createBullBoardApp()` retorna `null` e o painel não é montado.
+
+Locale forçado a `pt-BR` via `uiConfig.locale.lng`. Title custom: `"BulkZap — Filas"`.
+
+### 8. IA opt-in com failsafe
 
 Cliente Anthropic em `apps/api/src/services/ai.service.ts`:
 - Se `ANTHROPIC_API_KEY` vazia → lança `AiUnavailableError` → rota retorna 503.

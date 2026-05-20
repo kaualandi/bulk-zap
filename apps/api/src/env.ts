@@ -21,7 +21,6 @@ export const env = {
   ALERT_EMAIL_FROM: optional("ALERT_EMAIL_FROM", "alerts@example.com"),
   TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY ?? "",
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
-  BULL_BOARD_PORT: Number(optional("BULL_BOARD_PORT", "3002")),
   BULL_BOARD_USER: process.env.BULL_BOARD_USER ?? "",
   BULL_BOARD_PASS: process.env.BULL_BOARD_PASS ?? "",
   NODE_ENV: optional("NODE_ENV", "development"),

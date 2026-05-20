@@ -13,10 +13,12 @@ import { emailSubscriptionsRoutes } from "./routes/email-subscriptions.js";
 import { aiRoutes } from "./routes/ai.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { startClassifyInboundWorker } from "./jobs/classify-inbound.job.js";
-import { startBullBoard } from "./admin/bull-board.js";
+import { createBullBoardApp } from "./admin/bull-board.js";
 import { bootAllConnected } from "./services/account-manager.service.js";
 import { startSendMessageWorker } from "./jobs/send-message.job.js";
 import { startWarmupCheckWorker } from "./jobs/warmup-check.job.js";
+
+const bullBoardApp = createBullBoardApp();
 
 const app = new Elysia()
   .use(cors({ origin: env.CORS_ORIGINS }))
@@ -30,8 +32,14 @@ const app = new Elysia()
   .use(reportsRoutes)
   .use(emailSubscriptionsRoutes)
   .use(aiRoutes)
-  .use(inboundRoutes)
-  .listen({ hostname: env.API_HOST, port: env.API_PORT });
+  .use(inboundRoutes);
+
+if (bullBoardApp) {
+  app.all("/admin/queues", ({ request }) => bullBoardApp.fetch(request));
+  app.all("/admin/queues/*", ({ request }) => bullBoardApp.fetch(request));
+}
+
+app.listen({ hostname: env.API_HOST, port: env.API_PORT });
 
 logger.info(
   `🦊 BulkZap API listening on http://${env.API_HOST}:${env.API_PORT}`
@@ -40,7 +48,6 @@ logger.info(
 startSendMessageWorker();
 startWarmupCheckWorker();
 startClassifyInboundWorker();
-startBullBoard();
 
 bootAllConnected().catch((err) =>
   logger.error({ err }, "bootAllConnected failed")
