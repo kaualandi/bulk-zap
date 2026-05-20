@@ -1,159 +1,163 @@
-# Turborepo starter
+# BulkZap
 
-This Turborepo starter is maintained by the Turborepo core team.
+Plataforma de disparos WhatsApp em grupos com anti-ban, fallback Cloud API e alertas por email. Monorepo Bun + Turborepo.
 
-## Using this example
+## Stack
 
-Run the following command:
+- **Backend**: ElysiaJS (Bun) + TypeScript
+- **ORM**: Drizzle
+- **Banco**: Postgres 16
+- **Fila/Agendamento**: BullMQ + Redis
+- **Frontend**: Next.js 16 (App Router) + Tailwind 4
+- **WhatsApp**: Baileys (driver principal) + Cloud API (driver opcional)
+- **Email**: Resend
+- **Hospedagem**: 1 EC2 com Postgres + Redis nativos, apps via PM2
 
-```sh
-npx create-turbo@latest
+## Estrutura
+
+```
+apps/
+  api/   → Elysia + Baileys + BullMQ
+  web/   → Next.js (dashboard)
+packages/
+  db/    → Drizzle schema compartilhado
 ```
 
-## What's inside?
+## Dev: como rodar localmente
 
-This Turborepo includes the following packages/apps:
+### 1) Pré-requisitos
 
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```bash
+# Instale apenas se ainda não tiver
+brew install bun
+brew install redis
+brew services start redis
 ```
 
-Without global `turbo`, use your package manager:
+Postgres roda em Docker; o resto é nativo.
 
-```sh
-cd my-turborepo
-npx turbo build
-bun dlx turbo build
-bun exec turbo build
+### 2) Subir o Postgres
+
+```bash
+docker compose up -d
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+### 3) Configurar env e migrar
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+```bash
+cp .env.example .env
+# edite .env conforme necessário (RESEND_API_KEY etc.)
 
-```sh
-turbo build --filter=docs
+bun install
+cd packages/db && bun run db:migrate && cd -
 ```
 
-Without global `turbo`:
+### 4) Rodar API + Web
 
-```sh
-npx turbo build --filter=docs
-bun exec turbo build --filter=docs
-bun exec turbo build --filter=docs
+Em um terminal:
+
+```bash
+bun run dev
 ```
 
-### Develop
+- API: http://localhost:3000 (health: `/health`)
+- Web: http://localhost:3001
 
-To develop all apps and packages, run the following command:
+## Golden path (cenário do cliente real)
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+1. Abra http://localhost:3001
+2. **Números** → adicione um número com `warmupMode=off`, `dailyLimit` em branco
+3. Clique em **Abrir** no número criado → **Conectar** → escaneie o QR
+4. Após conexão: **Sincronizar grupos**
+5. **Templates** → crie um template (ex: `"Oi {{nome}}, novidade!"`)
+6. **Listas** → crie lista de **grupos** e selecione os alvos
+7. **Campanhas → Nova campanha**:
+   - Categoria `marketing`, template, lista, pool com o número conectado
+   - Jitter 15–90s
+   - Confirma consent LGPD
+8. **Revisar disparo**: o sistema mostra estimativa de duração + valida que o número é membro de todos os grupos
+9. **Iniciar disparo** → workers BullMQ processam mensagem por mensagem com jitter
 
-```sh
-cd my-turborepo
-turbo dev
+## Produção: deploy em EC2 (sem Docker)
+
+### Provisionamento
+
+```bash
+# Ubuntu 22.04 LTS na EC2 (t3.small ou t3.medium)
+sudo apt update
+sudo apt install -y postgresql-16 redis-server git curl
+curl -fsSL https://bun.sh/install | bash
+bun install -g pm2
+
+# Postgres
+sudo -u postgres createuser bulkzap --pwprompt
+sudo -u postgres createdb bulkzap -O bulkzap
+
+# Redis: garantir persistência AOF
+sudo sed -i 's/^appendonly no/appendonly yes/' /etc/redis/redis.conf
+sudo sed -i 's/^# appendfsync everysec/appendfsync everysec/' /etc/redis/redis.conf
+sudo systemctl restart redis-server
+sudo systemctl enable postgresql redis-server
 ```
 
-Without global `turbo`, use your package manager:
+### Deploy
 
-```sh
-cd my-turborepo
-npx turbo dev
-bun exec turbo dev
-bun exec turbo dev
+```bash
+git clone <repo-url> /opt/bulkzap
+cd /opt/bulkzap
+cp .env.example .env  # editar com credenciais reais
+bun install
+cd packages/db && bun run db:migrate && cd -
+cd apps/web && bun run build && cd -
+
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup  # habilita restart no boot
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+### Backup diário (cron)
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+`crontab -e`:
 
-```sh
-turbo dev --filter=web
+```cron
+0 3 * * * pg_dump -U bulkzap -Fc bulkzap | aws s3 cp - s3://bulkzap-backups/$(date +\%F).dump
 ```
 
-Without global `turbo`:
+### Health monitoring
 
-```sh
-npx turbo dev --filter=web
-bun exec turbo dev --filter=web
-bun exec turbo dev --filter=web
+- `curl localhost:3000/health` → `{"ok":true}`
+- CloudWatch alarm em `/health` (via EC2 instance metric ou external HTTP check) → email se cair
+
+## Recursos principais
+
+- **Driver Baileys**: auth state persistido no Postgres (tabelas `baileys_creds`/`baileys_keys`); restart do app retoma sessão.
+- **Driver Cloud API**: para envios 1-a-1 transacionais (não suporta grupos).
+- **Validação pool × grupo**: antes do disparo, sistema confirma que todos os números do pool são membros de todos os grupos alvo; bloqueia se algum não for.
+- **Anti-ban como sugestão, não bloqueio**: warmup é opt-in, limite diário pode ser nulo (sem limite). Cenário "número novo + 100 grupos no mesmo dia" funciona.
+- **Pause automático em ban real**: ao receber statusCode 401/403/440/515 no `connection.update`, conta vai para `banned`, campanha pausa, email dispara.
+- **Throttle de alertas**: máx 1 email por `accountId` × `eventType` em 15min (Redis).
+
+## Comandos úteis
+
+```bash
+# Typecheck
+bun run check-types
+
+# Lint
+bun run lint
+
+# Build
+bun run build
+
+# Banco (cwd packages/db)
+bun run db:generate    # gerar nova migração após mudar schema
+bun run db:migrate     # aplicar migrações pendentes
+bun run db:studio      # UI gráfica
 ```
 
-### Remote Caching
+## Limites e riscos conhecidos
 
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-bun exec turbo login
-bun exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-bun exec turbo link
-bun exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+1. **Cloud API + grupos**: a API oficial não suporta envio para grupos do jeito que o cliente usa hoje. Cloud API entra apenas como segundo driver para DMs.
+2. **Bans continuam acontecendo no Baileys**: o anti-ban reduz frequência, não elimina. A UX assume isso (alertas, rotação, fácil substituição de número).
+3. **Marketing em grupos é cinza legalmente** (LGPD): checkbox de consent é obrigatório na criação de campanha categoria=marketing.
+4. **EC2 single-host é SPOF**: aceitável para um único cliente. Backup diário S3 + runbook de restore. Em SaaS futuro, separar Postgres (RDS), Redis (ElastiCache) e app (ECS).
