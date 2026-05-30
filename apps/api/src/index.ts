@@ -12,17 +12,25 @@ import { reportsRoutes } from "./routes/reports.js";
 import { emailSubscriptionsRoutes } from "./routes/email-subscriptions.js";
 import { aiRoutes } from "./routes/ai.js";
 import { inboundRoutes } from "./routes/inbound.js";
+import { billingRoutes } from "./routes/billing.js";
 import { startClassifyInboundWorker } from "./jobs/classify-inbound.job.js";
 import { createBullBoardApp } from "./admin/bull-board.js";
 import { bootAllConnected } from "./services/account-manager.service.js";
 import { startSendMessageWorker } from "./jobs/send-message.job.js";
 import { startWarmupCheckWorker } from "./jobs/warmup-check.job.js";
+import { auth } from "./services/auth.service.js";
+import { seedPlans } from "./services/seed-plans.js";
 
 const bullBoardApp = createBullBoardApp();
 
 const app = new Elysia()
-  .use(cors({ origin: env.CORS_ORIGINS }))
+  .use(cors({ origin: env.CORS_ORIGINS, credentials: true }))
   .get("/health", () => ({ ok: true }))
+  // Better Auth handler (public: handles sign-up/in/out, verify, reset, etc.).
+  // .all forwarding preserves the /api/auth/* prefix Better Auth needs; do NOT
+  // use app.mount() which strips the prefix.
+  .all("/api/auth/*", ({ request }) => auth.handler(request))
+  .all("/api/auth", ({ request }) => auth.handler(request))
   .use(accountsRoutes)
   .use(contactsRoutes)
   .use(groupsRoutes)
@@ -32,7 +40,8 @@ const app = new Elysia()
   .use(reportsRoutes)
   .use(emailSubscriptionsRoutes)
   .use(aiRoutes)
-  .use(inboundRoutes);
+  .use(inboundRoutes)
+  .use(billingRoutes);
 
 if (bullBoardApp) {
   app.all("/admin/queues", ({ request }) => bullBoardApp.fetch(request));
@@ -52,5 +61,7 @@ startClassifyInboundWorker();
 bootAllConnected().catch((err) =>
   logger.error({ err }, "bootAllConnected failed")
 );
+
+seedPlans().catch((err) => logger.error({ err }, "seedPlans failed"));
 
 export type App = typeof app;

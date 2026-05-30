@@ -22,12 +22,13 @@ export type ValidationResult = {
 
 export async function validatePoolGroupMembership(
   listId: string,
-  accountPoolIds: string[]
+  accountPoolIds: string[],
+  organizationId: string
 ): Promise<ValidationResult> {
   const [list] = await db
     .select()
     .from(lists)
-    .where(eq(lists.id, listId))
+    .where(and(eq(lists.id, listId), eq(lists.organizationId, organizationId)))
     .limit(1);
   if (!list) throw new Error("list not found");
   if (list.type !== "groups") {
@@ -49,7 +50,12 @@ export async function validatePoolGroupMembership(
   const groupRows = await db
     .select()
     .from(groupsTable)
-    .where(inArray(groupsTable.id, groupIds));
+    .where(
+      and(
+        eq(groupsTable.organizationId, organizationId),
+        inArray(groupsTable.id, groupIds)
+      )
+    );
   const groupById = new Map(groupRows.map((g) => [g.id, g]));
 
   const memberships = await db

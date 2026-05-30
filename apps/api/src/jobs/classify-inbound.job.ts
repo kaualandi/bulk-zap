@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { inboundMessages } from "@bulk-zap/db";
+import { inboundMessages, whatsappAccounts } from "@bulk-zap/db";
 import { db } from "../db.js";
 import { logger } from "../logger.js";
 import {
@@ -73,15 +73,24 @@ export function startClassifyInboundWorker() {
         result.classification === "opt_out" &&
         confidence >= AUTO_BLOCKLIST_THRESHOLD
       ) {
-        await addToBlocklist(
-          msg.fromJid,
-          `Auto opt-out (confidence ${confidence.toFixed(2)})`,
-          "auto_opt_out"
-        );
-        logger.info(
-          { jid: msg.fromJid, confidence },
-          "auto-added to blocklist"
-        );
+        // Resolve the owning org via the receiving account to scope the blocklist.
+        const [acc] = await db
+          .select({ organizationId: whatsappAccounts.organizationId })
+          .from(whatsappAccounts)
+          .where(eq(whatsappAccounts.id, msg.accountId))
+          .limit(1);
+        if (acc?.organizationId) {
+          await addToBlocklist(
+            acc.organizationId,
+            msg.fromJid,
+            `Auto opt-out (confidence ${confidence.toFixed(2)})`,
+            "auto_opt_out"
+          );
+          logger.info(
+            { jid: msg.fromJid, confidence, organizationId: acc.organizationId },
+            "auto-added to blocklist"
+          );
+        }
       }
     } catch (err) {
       logger.error({ err, inboundMessageId }, "classify-inbound failed");

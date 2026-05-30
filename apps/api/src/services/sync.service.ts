@@ -12,6 +12,7 @@ import type {
 
 export async function upsertSyncedContacts(
   accountId: string,
+  organizationId: string,
   list: ContactSummary[]
 ): Promise<void> {
   if (list.length === 0) return;
@@ -20,6 +21,7 @@ export async function upsertSyncedContacts(
     await db
       .insert(contactsTable)
       .values({
+        organizationId,
         accountId,
         jid: c.jid,
         name: c.name ?? null,
@@ -39,6 +41,7 @@ export async function upsertSyncedContacts(
 
 export async function upsertSyncedGroups(
   accountId: string,
+  organizationId: string,
   list: GroupSummary[]
 ): Promise<void> {
   if (list.length === 0) return;
@@ -47,7 +50,12 @@ export async function upsertSyncedGroups(
   const existing = await db
     .select()
     .from(groupsTable)
-    .where(inArray(groupsTable.jid, jids));
+    .where(
+      and(
+        eq(groupsTable.organizationId, organizationId),
+        inArray(groupsTable.jid, jids)
+      )
+    );
   const byJid = new Map(existing.map((g) => [g.jid, g]));
 
   const now = new Date();
@@ -66,6 +74,7 @@ export async function upsertSyncedGroups(
       const inserted = await db
         .insert(groupsTable)
         .values({
+          organizationId,
           jid: g.jid,
           subject: g.subject,
           participantsCount: g.participantsCount,

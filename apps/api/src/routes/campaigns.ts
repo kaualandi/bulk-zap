@@ -1,7 +1,8 @@
 import { Elysia, t } from "elysia";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { campaigns, campaignRuns } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { authPlugin } from "../lib/auth-middleware.js";
 import {
   cancelCampaign,
   createCampaign,
@@ -12,28 +13,47 @@ import {
 } from "../services/campaign.service.js";
 import { validatePoolGroupMembership } from "../services/group-validation.service.js";
 
-export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
-  .get("/", async () => {
-    return await db
-      .select()
-      .from(campaigns)
-      .orderBy(desc(campaigns.createdAt));
-  })
+/** Returns the campaign row only if it belongs to the org; null otherwise. */
+async function getOwnedCampaign(id: string, organizationId: string) {
+  const [row] = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(eq(campaigns.id, id), eq(campaigns.organizationId, organizationId))
+    )
+    .limit(1);
+  return row ?? null;
+}
 
-  .get("/:id", async ({ params }) => {
-    const [row] = await db
-      .select()
-      .from(campaigns)
-      .where(eq(campaigns.id, params.id))
-      .limit(1);
-    if (!row) return new Response("not found", { status: 404 });
-    return row;
-  })
+export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
+  .use(authPlugin)
+  .get(
+    "/",
+    async ({ organizationId }) => {
+      return await db
+        .select()
+        .from(campaigns)
+        .where(eq(campaigns.organizationId, organizationId))
+        .orderBy(desc(campaigns.createdAt));
+    },
+    { auth: true }
+  )
+
+  .get(
+    "/:id",
+    async ({ params, organizationId }) => {
+      const row = await getOwnedCampaign(params.id, organizationId);
+      if (!row) return new Response("not found", { status: 404 });
+      return row;
+    },
+    { auth: true }
+  )
 
   .post(
     "/",
-    async ({ body }) => {
+    async ({ body, organizationId }) => {
       return await createCampaign({
+        organizationId,
         name: body.name,
         category: body.category,
         templateId: body.templateId,
@@ -47,6 +67,7 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
       });
     },
     {
+      auth: true,
       body: t.Object({
         name: t.String({ minLength: 1 }),
         category: t.Union([
@@ -67,27 +88,32 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
     }
   )
 
-  .get("/:id/estimate", async ({ params }) => {
-    return await estimateCampaign(params.id);
-  })
+  .get(
+    "/:id/estimate",
+    async ({ params, organizationId }) => {
+      return await estimateCampaign(params.id, organizationId);
+    },
+    { auth: true }
+  )
 
-  .get("/:id/validate", async ({ params }) => {
-    const [campaign] = await db
-      .select()
-      .from(campaigns)
-      .where(eq(campaigns.id, params.id))
-      .limit(1);
-    if (!campaign) return new Response("not found", { status: 404 });
-    return await validatePoolGroupMembership(
-      campaign.listId,
-      campaign.accountPoolIds
-    );
-  })
+  .get(
+    "/:id/validate",
+    async ({ params, organizationId }) => {
+      const campaign = await getOwnedCampaign(params.id, organizationId);
+      if (!campaign) return new Response("not found", { status: 404 });
+      return await validatePoolGroupMembership(
+        campaign.listId,
+        campaign.accountPoolIds,
+        organizationId
+      );
+    },
+    { auth: true }
+  )
 
   .put(
     "/:id",
-    async ({ params, body }) => {
-      return await updateCampaign(params.id, {
+    async ({ params, body, organizationId }) => {
+      return await updateCampaign(params.id, organizationId, {
         name: body.name,
         category: body.category,
         templateId: body.templateId,
@@ -106,6 +132,7 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
       });
     },
     {
+      auth: true,
       body: t.Object({
         name: t.Optional(t.String({ minLength: 1 })),
         category: t.Optional(
@@ -130,31 +157,39 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
 
   .post(
     "/:id/launch",
-    async ({ params, query }) => {
+    async ({ params, query, organizationId }) => {
       const respectSchedule = query.respectSchedule === "true";
-      return await launchCampaign(params.id, { respectSchedule });
+      return await launchCampaign(params.id, organizationId, {
+        respectSchedule,
+      });
     },
     {
+      auth: true,
       query: t.Object({
         respectSchedule: t.Optional(t.String()),
       }),
     }
   )
 
-  .post("/:id/pause", async ({ params }) => {
-    await pauseCampaign(params.id);
-    return { ok: true };
-  })
+  .post(
+    "/:id/pause",
+    async ({ params, organizationId }) => {
+      await pauseCampaign(params.id, organizationId);
+      return { ok: true };
+    },
+    { auth: true }
+  )
 
   .post(
     "/:id/cancel",
-    async ({ params, body }) => {
-      const result = await cancelCampaign(params.id, {
+    async ({ params, body, organizationId }) => {
+      const result = await cancelCampaign(params.id, organizationId, {
         deleteSent: body?.deleteSent === true,
       });
       return { ok: true, ...result };
     },
     {
+      auth: true,
       body: t.Optional(
         t.Object({
           deleteSent: t.Optional(t.Boolean()),
@@ -163,26 +198,40 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
     }
   )
 
-  .delete("/:id", async ({ params }) => {
-    const [existing] = await db
-      .select()
-      .from(campaigns)
-      .where(eq(campaigns.id, params.id))
-      .limit(1);
-    if (!existing) return new Response("not found", { status: 404 });
-    if (existing.status !== "draft") {
-      return new Response("only draft campaigns can be deleted", {
-        status: 400,
-      });
-    }
-    await db.delete(campaigns).where(eq(campaigns.id, params.id));
-    return { ok: true };
-  })
+  .delete(
+    "/:id",
+    async ({ params, organizationId }) => {
+      const existing = await getOwnedCampaign(params.id, organizationId);
+      if (!existing) return new Response("not found", { status: 404 });
+      if (existing.status !== "draft") {
+        return new Response("only draft campaigns can be deleted", {
+          status: 400,
+        });
+      }
+      await db
+        .delete(campaigns)
+        .where(
+          and(
+            eq(campaigns.id, params.id),
+            eq(campaigns.organizationId, organizationId)
+          )
+        );
+      return { ok: true };
+    },
+    { auth: true }
+  )
 
-  .get("/:id/runs", async ({ params }) => {
-    return await db
-      .select()
-      .from(campaignRuns)
-      .where(eq(campaignRuns.campaignId, params.id))
-      .orderBy(desc(campaignRuns.startedAt));
-  });
+  .get(
+    "/:id/runs",
+    async ({ params, organizationId }) => {
+      // campaign_runs is a child table; verify the parent campaign is the org's.
+      if (!(await getOwnedCampaign(params.id, organizationId)))
+        return new Response("not found", { status: 404 });
+      return await db
+        .select()
+        .from(campaignRuns)
+        .where(eq(campaignRuns.campaignId, params.id))
+        .orderBy(desc(campaignRuns.startedAt));
+    },
+    { auth: true }
+  );

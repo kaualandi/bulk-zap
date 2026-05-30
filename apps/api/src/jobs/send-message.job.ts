@@ -1,10 +1,25 @@
 import { and, eq, ne, sql } from "drizzle-orm";
-import { campaignRuns, campaigns, messages } from "@bulk-zap/db";
+import { campaignRuns, campaigns, messages, whatsappAccounts } from "@bulk-zap/db";
 import { db } from "../db.js";
 import { logger } from "../logger.js";
 import { getDriver } from "../services/account-manager.service.js";
 import { incrementDailyUsed } from "../services/anti-ban.service.js";
+import { canDispatch, recordDispatch } from "../services/billing.service.js";
 import { createSendMessageWorker } from "./queue.js";
+
+/**
+ * Resolve the owning organization for a message via its sending account.
+ * whatsapp_accounts carries organization_id (NOT NULL). Returns null if the
+ * account row is gone (treated as a hard failure upstream).
+ */
+async function resolveOrgIdForAccount(accountId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ organizationId: whatsappAccounts.organizationId })
+    .from(whatsappAccounts)
+    .where(eq(whatsappAccounts.id, accountId))
+    .limit(1);
+  return row?.organizationId ?? null;
+}
 
 async function maybeCompleteCampaign(campaignRunId: string): Promise<void> {
   const [pending] = await db
@@ -61,6 +76,42 @@ export function startSendMessageWorker() {
       return;
     }
 
+    // --- Billing gate (SEPARATE from anti-ban; this blocks, anti-ban warns) ---
+    const orgId = await resolveOrgIdForAccount(message.accountId);
+    if (!orgId) {
+      await db
+        .update(messages)
+        .set({ status: "failed", error: "org_not_found" })
+        .where(eq(messages.id, messageId));
+      await db
+        .update(campaignRuns)
+        .set({ failedCount: sql`${campaignRuns.failedCount} + 1` })
+        .where(eq(campaignRuns.id, campaignRunId));
+      await maybeCompleteCampaign(campaignRunId);
+      logger.warn({ messageId, accountId: message.accountId }, "no org for account; blocked");
+      return;
+    }
+
+    const gate = await canDispatch(orgId);
+    if (!gate.allowed) {
+      // Mark blocked and skip the send. Do NOT throw — billing block is a
+      // terminal, non-retryable condition for this message.
+      await db
+        .update(messages)
+        .set({ status: "failed", error: `billing_blocked:${gate.reason ?? "unknown"}` })
+        .where(eq(messages.id, messageId));
+      await db
+        .update(campaignRuns)
+        .set({ failedCount: sql`${campaignRuns.failedCount} + 1` })
+        .where(eq(campaignRuns.id, campaignRunId));
+      await maybeCompleteCampaign(campaignRunId);
+      logger.warn(
+        { messageId, orgId, reason: gate.reason },
+        "message blocked by billing gate"
+      );
+      return;
+    }
+
     const driver = getDriver(message.accountId);
     if (!driver) {
       await db
@@ -90,6 +141,8 @@ export function startSendMessageWorker() {
         .set({ sentCount: sql`${campaignRuns.sentCount} + 1` })
         .where(eq(campaignRuns.id, campaignRunId));
       await incrementDailyUsed(message.accountId);
+      // Count the successful dispatch against the org's billing quota.
+      await recordDispatch(orgId, 1);
       logger.debug({ messageId, externalId: result.messageId }, "message sent");
       await maybeCompleteCampaign(campaignRunId);
     } catch (err) {

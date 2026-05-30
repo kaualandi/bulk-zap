@@ -6,6 +6,7 @@ import {
   pgEnum,
   primaryKey,
 } from "drizzle-orm/pg-core";
+import { organizations } from "./organizations.js";
 
 export const listTypeEnum = pgEnum("list_type", ["contacts", "groups"]);
 export const listMemberTypeEnum = pgEnum("list_member_type", [
@@ -15,6 +16,9 @@ export const listMemberTypeEnum = pgEnum("list_member_type", [
 
 export const lists = pgTable("lists", {
   id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   type: listTypeEnum("type").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })

@@ -5,8 +5,10 @@ import {
   timestamp,
   pgEnum,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { whatsappAccounts } from "./whatsapp-accounts.js";
+import { organizations } from "./organizations.js";
 
 export const contactSourceEnum = pgEnum("contact_source", [
   "whatsapp_sync",
@@ -18,6 +20,9 @@ export const contacts = pgTable(
   "contacts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     accountId: uuid("account_id").references(() => whatsappAccounts.id, {
       onDelete: "set null",
     }),
@@ -37,6 +42,7 @@ export const contacts = pgTable(
       table.jid,
       table.accountId
     ),
+    orgIdx: index("contacts_org_idx").on(table.organizationId),
   })
 );
 

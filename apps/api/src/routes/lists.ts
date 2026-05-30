@@ -1,21 +1,42 @@
 import { Elysia, t } from "elysia";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { lists, listMembers } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { authPlugin } from "../lib/auth-middleware.js";
+
+/** Returns the list row only if it belongs to the org; null otherwise. */
+async function getOwnedList(id: string, organizationId: string) {
+  const [row] = await db
+    .select()
+    .from(lists)
+    .where(and(eq(lists.id, id), eq(lists.organizationId, organizationId)))
+    .limit(1);
+  return row ?? null;
+}
 
 export const listsRoutes = new Elysia({ prefix: "/lists" })
-  .get("/", async () => await db.select().from(lists))
+  .use(authPlugin)
+  .get(
+    "/",
+    async ({ organizationId }) =>
+      await db
+        .select()
+        .from(lists)
+        .where(eq(lists.organizationId, organizationId)),
+    { auth: true }
+  )
 
   .post(
     "/",
-    async ({ body }) => {
+    async ({ body, organizationId }) => {
       const [row] = await db
         .insert(lists)
-        .values({ name: body.name, type: body.type })
+        .values({ organizationId, name: body.name, type: body.type })
         .returning();
       return row;
     },
     {
+      auth: true,
       body: t.Object({
         name: t.String({ minLength: 1 }),
         type: t.Union([t.Literal("contacts"), t.Literal("groups")]),
@@ -23,16 +44,24 @@ export const listsRoutes = new Elysia({ prefix: "/lists" })
     }
   )
 
-  .get("/:id/members", async ({ params }) => {
-    return await db
-      .select()
-      .from(listMembers)
-      .where(eq(listMembers.listId, params.id));
-  })
+  .get(
+    "/:id/members",
+    async ({ params, organizationId }) => {
+      if (!(await getOwnedList(params.id, organizationId)))
+        return new Response("not found", { status: 404 });
+      return await db
+        .select()
+        .from(listMembers)
+        .where(eq(listMembers.listId, params.id));
+    },
+    { auth: true }
+  )
 
   .post(
     "/:id/members",
-    async ({ params, body }) => {
+    async ({ params, body, organizationId }) => {
+      if (!(await getOwnedList(params.id, organizationId)))
+        return new Response("not found", { status: 404 });
       for (const m of body.members) {
         await db
           .insert(listMembers)
@@ -46,6 +75,7 @@ export const listsRoutes = new Elysia({ prefix: "/lists" })
       return { ok: true, count: body.members.length };
     },
     {
+      auth: true,
       body: t.Object({
         members: t.Array(
           t.Object({
@@ -57,7 +87,15 @@ export const listsRoutes = new Elysia({ prefix: "/lists" })
     }
   )
 
-  .delete("/:id", async ({ params }) => {
-    await db.delete(lists).where(eq(lists.id, params.id));
-    return { ok: true };
-  });
+  .delete(
+    "/:id",
+    async ({ params, organizationId }) => {
+      await db
+        .delete(lists)
+        .where(
+          and(eq(lists.id, params.id), eq(lists.organizationId, organizationId))
+        );
+      return { ok: true };
+    },
+    { auth: true }
+  );

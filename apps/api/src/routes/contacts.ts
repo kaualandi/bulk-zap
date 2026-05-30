@@ -1,19 +1,24 @@
 import { Elysia, t } from "elysia";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { contacts } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { authPlugin } from "../lib/auth-middleware.js";
 
 export const contactsRoutes = new Elysia({ prefix: "/contacts" })
+  .use(authPlugin)
   .get(
     "/",
-    async ({ query }) => {
-      const base = db.select().from(contacts);
-      const rows = query.accountId
-        ? await base.where(eq(contacts.accountId, query.accountId))
-        : await base;
-      return rows;
+    async ({ query, organizationId }) => {
+      const where = query.accountId
+        ? and(
+            eq(contacts.organizationId, organizationId),
+            eq(contacts.accountId, query.accountId)
+          )
+        : eq(contacts.organizationId, organizationId);
+      return await db.select().from(contacts).where(where);
     },
     {
+      auth: true,
       query: t.Object({
         accountId: t.Optional(t.String()),
       }),
@@ -22,13 +27,14 @@ export const contactsRoutes = new Elysia({ prefix: "/contacts" })
 
   .post(
     "/import-csv",
-    async ({ body }) => {
+    async ({ body, organizationId }) => {
       const inserted: { jid: string }[] = [];
       for (const row of body.rows) {
         const jid = row.phoneE164.replace(/\D/g, "") + "@s.whatsapp.net";
         await db
           .insert(contacts)
           .values({
+            organizationId,
             jid,
             name: row.name ?? null,
             source: "csv_import",
@@ -40,6 +46,7 @@ export const contactsRoutes = new Elysia({ prefix: "/contacts" })
       return { ok: true, count: inserted.length };
     },
     {
+      auth: true,
       body: t.Object({
         accountId: t.Optional(t.String()),
         rows: t.Array(

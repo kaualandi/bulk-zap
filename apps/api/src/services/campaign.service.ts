@@ -23,6 +23,7 @@ import { getDriver } from "./account-manager.service.js";
 import { logger } from "../logger.js";
 
 export type CreateCampaignInput = {
+  organizationId: string;
   name: string;
   category: "marketing" | "transacional" | "atendimento" | "outros";
   templateId: string;
@@ -35,12 +36,32 @@ export type CreateCampaignInput = {
   marketingConsentConfirmed?: string | null;
 };
 
+/** Load a campaign only if it belongs to the org. Throws otherwise. */
+async function loadOwnedCampaign(
+  campaignId: string,
+  organizationId: string
+): Promise<Campaign> {
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.organizationId, organizationId)
+      )
+    )
+    .limit(1);
+  if (!campaign) throw new Error("campaign not found");
+  return campaign;
+}
+
 export async function createCampaign(
   input: CreateCampaignInput
 ): Promise<Campaign> {
   const [row] = await db
     .insert(campaigns)
     .values({
+      organizationId: input.organizationId,
       name: input.name,
       category: input.category,
       templateId: input.templateId,
@@ -57,15 +78,13 @@ export async function createCampaign(
   return row!;
 }
 
-export async function estimateCampaign(campaignId: string) {
-  const [campaign] = await db
-    .select()
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-    .limit(1);
-  if (!campaign) throw new Error("campaign not found");
+export async function estimateCampaign(
+  campaignId: string,
+  organizationId: string
+) {
+  const campaign = await loadOwnedCampaign(campaignId, organizationId);
 
-  const targets = await loadTargets(campaign.listId);
+  const targets = await loadTargets(campaign.listId, organizationId);
   const totalMessages = targets.length;
   const estimatedMs = estimateCampaignDurationMs(
     totalMessages,
@@ -75,11 +94,11 @@ export async function estimateCampaign(campaignId: string) {
   return { totalMessages, estimatedMs };
 }
 
-async function loadTargets(listId: string) {
+async function loadTargets(listId: string, organizationId: string) {
   const [list] = await db
     .select()
     .from(lists)
-    .where(eq(lists.id, listId))
+    .where(and(eq(lists.id, listId), eq(lists.organizationId, organizationId)))
     .limit(1);
   if (!list) throw new Error("list not found");
 
@@ -112,7 +131,10 @@ async function loadTargets(listId: string) {
       .select()
       .from(contactsTable)
       .where(inArray(contactsTable.id, ids));
-    const blocked = await db.select().from(contactBlocklist);
+    const blocked = await db
+      .select()
+      .from(contactBlocklist)
+      .where(eq(contactBlocklist.organizationId, organizationId));
     const blockedJids = new Set(blocked.map((b) => b.jid));
     return rows
       .filter((c) => !blockedJids.has(c.jid))
@@ -132,6 +154,7 @@ export type LaunchOptions = {
 
 export async function launchCampaign(
   campaignId: string,
+  organizationId: string,
   opts: LaunchOptions = {}
 ): Promise<{
   runId: string;
@@ -139,21 +162,21 @@ export async function launchCampaign(
   scheduled: boolean;
   startsAt: Date;
 }> {
-  const [campaign] = await db
-    .select()
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-    .limit(1);
-  if (!campaign) throw new Error("campaign not found");
+  const campaign = await loadOwnedCampaign(campaignId, organizationId);
 
   const [template] = await db
     .select()
     .from(templates)
-    .where(eq(templates.id, campaign.templateId))
+    .where(
+      and(
+        eq(templates.id, campaign.templateId),
+        eq(templates.organizationId, organizationId)
+      )
+    )
     .limit(1);
   if (!template) throw new Error("template not found");
 
-  const targets = await loadTargets(campaign.listId);
+  const targets = await loadTargets(campaign.listId, organizationId);
   if (targets.length === 0) {
     throw new Error("list has no targets");
   }
@@ -247,14 +270,10 @@ export async function launchCampaign(
 
 export async function updateCampaign(
   campaignId: string,
+  organizationId: string,
   input: Partial<CreateCampaignInput>
 ): Promise<Campaign> {
-  const [existing] = await db
-    .select()
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-    .limit(1);
-  if (!existing) throw new Error("campaign not found");
+  const existing = await loadOwnedCampaign(campaignId, organizationId);
   if (existing.status !== "draft") {
     throw new Error("only draft campaigns can be edited");
   }
@@ -281,16 +300,30 @@ export async function updateCampaign(
           : existing.marketingConsentConfirmed,
       updatedAt: new Date(),
     })
-    .where(eq(campaigns.id, campaignId))
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.organizationId, organizationId)
+      )
+    )
     .returning();
   return row!;
 }
 
-export async function pauseCampaign(campaignId: string): Promise<void> {
+export async function pauseCampaign(
+  campaignId: string,
+  organizationId: string
+): Promise<void> {
+  await loadOwnedCampaign(campaignId, organizationId);
   await db
     .update(campaigns)
     .set({ status: "paused", updatedAt: new Date() })
-    .where(eq(campaigns.id, campaignId));
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.organizationId, organizationId)
+      )
+    );
   // pause active runs
   await db
     .update(campaignRuns)
@@ -312,14 +345,10 @@ export type CancelResult = {
 
 export async function cancelCampaign(
   campaignId: string,
+  organizationId: string,
   opts: { deleteSent?: boolean } = {}
 ): Promise<CancelResult> {
-  const [campaign] = await db
-    .select()
-    .from(campaigns)
-    .where(eq(campaigns.id, campaignId))
-    .limit(1);
-  if (!campaign) throw new Error("campaign not found");
+  const campaign = await loadOwnedCampaign(campaignId, organizationId);
 
   const cancelable = new Set<Campaign["status"]>([
     "scheduled",
@@ -417,7 +446,12 @@ export async function cancelCampaign(
   await db
     .update(campaigns)
     .set({ status: "canceled", updatedAt: new Date() })
-    .where(eq(campaigns.id, campaignId));
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.organizationId, organizationId)
+      )
+    );
 
   return result;
 }

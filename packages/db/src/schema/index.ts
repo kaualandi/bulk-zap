@@ -1,3 +1,6 @@
+export * from "./auth.js";
+export * from "./organizations.js";
+export * from "./billing.js";
 export * from "./whatsapp-accounts.js";
 export * from "./baileys-auth.js";
 export * from "./contacts.js";
