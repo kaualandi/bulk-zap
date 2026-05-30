@@ -72,6 +72,10 @@ export class CloudApiDriver implements WhatsAppDriver {
     return { messageId: data.messages?.[0]?.id ?? "" };
   }
 
+  async deleteMessage(): Promise<void> {
+    throw new UnsupportedOperationError("cloud_api", "deleteMessage");
+  }
+
   async listGroups(): Promise<GroupSummary[]> {
     throw new UnsupportedOperationError("cloud_api", "listGroups");
   }

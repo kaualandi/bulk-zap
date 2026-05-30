@@ -15,6 +15,7 @@ export const messageStatusEnum = pgEnum("message_status", [
   "delivered",
   "read",
   "failed",
+  "canceled",
 ]);
 
 export const messageTargetTypeEnum = pgEnum("message_target_type", [
@@ -38,6 +39,7 @@ export const messages = pgTable(
     status: messageStatusEnum("status").notNull().default("queued"),
     error: text("error"),
     bullJobId: text("bull_job_id"),
+    providerMsgId: text("provider_msg_id"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     readAt: timestamp("read_at", { withTimezone: true }),

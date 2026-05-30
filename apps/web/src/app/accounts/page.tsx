@@ -18,16 +18,11 @@ import {
   Tr,
 } from "@/components/ui/table";
 import { Term } from "@/components/ui/term";
-
-const statusTone: Record<
-  Account["status"],
-  "neutral" | "warning" | "success" | "danger"
-> = {
-  disconnected: "neutral",
-  connecting: "warning",
-  connected: "success",
-  banned: "danger",
-};
+import {
+  accountStatusLabel,
+  accountStatusTone,
+  driverLabel,
+} from "@/lib/labels";
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -156,10 +151,12 @@ export default function AccountsPage() {
             <Tr key={a.id}>
               <Td className="font-medium text-zinc-900">{a.displayName}</Td>
               <Td>
-                <Badge tone="neutral">{a.driver}</Badge>
+                <Badge tone="neutral">{driverLabel(a.driver)}</Badge>
               </Td>
               <Td>
-                <Badge tone={statusTone[a.status]}>{a.status}</Badge>
+                <Badge tone={accountStatusTone(a.status)}>
+                  {accountStatusLabel(a.status)}
+                </Badge>
               </Td>
               <Td>
                 {a.dailyLimit ?? (

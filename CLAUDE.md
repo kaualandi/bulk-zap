@@ -263,6 +263,8 @@ Padrão visual: linha "Termos: A · B · C ·  ..." logo abaixo do `<PageHeader>
 
 10. **JIDs de grupo terminam em `@g.us`**, contatos em `@s.whatsapp.net`. Filtramos grupos em `messages.upsert` para não tratar como inbound de pessoa.
 
+11. **`bun --watch` reinicia a sessão Baileys a cada save**: o socket morre e reconecta, e o celular pareado notifica "sincronização concluída" a cada ciclo. Em dev, com número pareado, prefira `cd apps/api && bun run start` (sem watch) para não inundar o celular de notificações. O reconnect tem backoff exponencial (3s → 60s) em `baileys-driver.ts`, mas evitar o ciclo é melhor.
+
 ## Roadmap conhecido (pós-MVP)
 
 Listado no plano completo. Curto: multi-tenant, mídia (imagens/áudios), webhooks out, re-QR automático com push, painel de qualidade do número, onboarding conversacional.

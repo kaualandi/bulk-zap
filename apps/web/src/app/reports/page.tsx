@@ -13,18 +13,9 @@ import {
   Th,
   Tr,
 } from "@/components/ui/table";
+import { accountStatusLabel, accountStatusTone } from "@/lib/labels";
 
 type Stats = { status: string; count: number }[];
-
-const statusTone: Record<
-  Account["status"],
-  "neutral" | "warning" | "success" | "danger"
-> = {
-  disconnected: "neutral",
-  connecting: "warning",
-  connected: "success",
-  banned: "danger",
-};
 
 export default function ReportsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -75,7 +66,9 @@ export default function ReportsPage() {
               <Tr key={a.id}>
                 <Td className="font-medium text-zinc-900">{a.displayName}</Td>
                 <Td>
-                  <Badge tone={statusTone[a.status]}>{a.status}</Badge>
+                  <Badge tone={accountStatusTone(a.status)}>
+                    {accountStatusLabel(a.status)}
+                  </Badge>
                 </Td>
                 <Td className="text-green-700 font-medium">
                   {statFor(stats, "sent")}

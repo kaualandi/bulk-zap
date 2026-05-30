@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 import { Term } from "@/components/ui/term";
+import { accountStatusLabel, accountStatusTone } from "@/lib/labels";
 
 type WsEvent =
   | { type: "qr"; qr: string; dataUrl: string }
@@ -18,16 +19,6 @@ type WsEvent =
   | { type: "banned"; reason?: string }
   | { type: "contacts-updated" }
   | { type: "groups-updated" };
-
-const statusTone: Record<
-  Account["status"],
-  "neutral" | "warning" | "success" | "danger"
-> = {
-  disconnected: "neutral",
-  connecting: "warning",
-  connected: "success",
-  banned: "danger",
-};
 
 export default function AccountDetailPage() {
   const params = useParams<{ id: string }>();
@@ -92,7 +83,11 @@ export default function AccountDetailPage() {
             ? "Driver Baileys (não-oficial, via QR Code). Suporta envio em grupos."
             : "Driver Cloud API (oficial da Meta). Apenas mensagens 1-a-1."
         }
-        action={<Badge tone={statusTone[account.status]}>{account.status}</Badge>}
+        action={
+          <Badge tone={accountStatusTone(account.status)}>
+            {accountStatusLabel(account.status)}
+          </Badge>
+        }
       />
 
       <div className="text-sm text-zinc-600 mb-6 leading-relaxed flex flex-wrap gap-x-1">

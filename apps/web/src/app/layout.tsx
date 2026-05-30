@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "sonner";
 import { Sidebar } from "@/components/sidebar";
 import "./globals.css";
 
@@ -35,6 +36,7 @@ export default function RootLayout({
             <div className="max-w-6xl mx-auto px-8 py-10">{children}</div>
           </main>
         </div>
+        <Toaster richColors position="bottom-right" />
       </body>
     </html>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   api,
   type Account,
@@ -20,6 +21,12 @@ import { AiRiskBadge } from "@/components/ai-risk-badge";
 import { useAiRisk } from "@/lib/use-ai-risk";
 import { AiSuggestionChip } from "@/components/ai-suggestion-chip";
 import { Term } from "@/components/ui/term";
+import {
+  accountStatusLabel,
+  accountStatusTone,
+  driverLabel,
+  warmupModeLabel,
+} from "@/lib/labels";
 
 const CATEGORIES = [
   { value: "marketing", label: "Marketing" },
@@ -135,17 +142,36 @@ export default function NewCampaignPage() {
     setEstimate(e);
   }
 
-  async function launchNow() {
+  const futureSchedule = useMemo(() => {
+    if (!scheduleAt) return null;
+    const date = new Date(scheduleAt);
+    if (Number.isNaN(date.getTime())) return null;
+    if (date.getTime() <= Date.now()) return null;
+    return date;
+  }, [scheduleAt]);
+
+  async function launchNow(respectSchedule: boolean) {
     if (!createdCampaign) return;
     setLaunching(true);
+    const promise = api.post<{
+      runId: string;
+      enqueued: number;
+      scheduled: boolean;
+      startsAt: string;
+    }>(
+      `/campaigns/${createdCampaign.id}/launch?respectSchedule=${respectSchedule}`
+    );
+    toast.promise(promise, {
+      loading: respectSchedule ? "Agendando disparo…" : "Iniciando disparo…",
+      success: (result) =>
+        result.scheduled
+          ? `Agendado: ${result.enqueued} mensagens começam em ${new Date(result.startsAt).toLocaleString()}`
+          : `Disparo iniciado: ${result.enqueued} mensagens enfileiradas`,
+      error: (err) => `Erro: ${(err as Error).message}`,
+    });
     try {
-      const result = await api.post<{ runId: string; enqueued: number }>(
-        `/campaigns/${createdCampaign.id}/launch`
-      );
-      alert(`Disparo iniciado: ${result.enqueued} mensagens enfileiradas.`);
-      router.push("/campaigns");
-    } catch (err) {
-      alert(`Erro ao iniciar: ${(err as Error).message}`);
+      await promise;
+      router.push(`/campaigns/${createdCampaign.id}`);
     } finally {
       setLaunching(false);
     }
@@ -227,22 +253,46 @@ export default function NewCampaignPage() {
             </Alert>
           )}
 
-          <div className="flex gap-3 mt-2">
+          {futureSchedule && (
+            <Alert tone="info" title="Agendamento configurado">
+              Esta campanha foi agendada para{" "}
+              <strong>{futureSchedule.toLocaleString()}</strong>. Você pode
+              agendar para essa data ou iniciar agora ignorando o agendamento.
+            </Alert>
+          )}
+
+          <div className="flex flex-wrap gap-3 mt-2">
+            {futureSchedule && (
+              <Button
+                size="lg"
+                onClick={() => launchNow(true)}
+                disabled={launching || !validation?.ok}
+              >
+                {launching ? "Agendando…" : "📅 Agendar para a data"}
+              </Button>
+            )}
             <Button
               size="lg"
-              onClick={launchNow}
+              variant={futureSchedule ? "secondary" : "primary"}
+              onClick={() => launchNow(false)}
               disabled={launching || !validation?.ok}
             >
               {launching ? "Iniciando…" : "🚀 Iniciar disparo agora"}
             </Button>
             <Button
-              variant="secondary"
+              variant="ghost"
               size="lg"
-              onClick={() => router.push("/campaigns")}
+              onClick={() =>
+                router.push(`/campaigns/${createdCampaign.id}`)
+              }
             >
-              Voltar
+              Salvar como rascunho
             </Button>
           </div>
+          <p className="text-xs text-zinc-500 mt-1">
+            Rascunhos ficam visíveis em <strong>Campanhas</strong> e podem ser
+            editados ou disparados depois.
+          </p>
         </div>
       </div>
     );
@@ -355,20 +405,14 @@ export default function NewCampaignPage() {
                     />
                     <span className="text-sm flex-1">{a.displayName}</span>
                     <div className="flex items-center gap-2">
-                      <Badge tone="neutral">{a.driver}</Badge>
-                      <Badge
-                        tone={
-                          a.status === "connected"
-                            ? "success"
-                            : a.status === "banned"
-                              ? "danger"
-                              : "neutral"
-                        }
-                      >
-                        {a.status}
+                      <Badge tone="neutral">{driverLabel(a.driver)}</Badge>
+                      <Badge tone={accountStatusTone(a.status)}>
+                        {accountStatusLabel(a.status)}
                       </Badge>
                       {a.warmupMode !== "off" && (
-                        <Badge tone="info">warmup {a.warmupMode}</Badge>
+                        <Badge tone="info">
+                          Aquecimento: {warmupModeLabel(a.warmupMode)}
+                        </Badge>
                       )}
                     </div>
                   </label>

@@ -15,6 +15,13 @@
       "when": 1779281971817,
       "tag": "0001_married_anita_blake",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780026896589,
+      "tag": "0002_young_the_initiative",
+      "breakpoints": true
     }
   ]
 }

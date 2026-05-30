@@ -1,10 +1,47 @@
-import { eq, sql } from "drizzle-orm";
-import { campaignRuns, messages } from "@bulk-zap/db";
+import { and, eq, ne, sql } from "drizzle-orm";
+import { campaignRuns, campaigns, messages } from "@bulk-zap/db";
 import { db } from "../db.js";
 import { logger } from "../logger.js";
 import { getDriver } from "../services/account-manager.service.js";
 import { incrementDailyUsed } from "../services/anti-ban.service.js";
 import { createSendMessageWorker } from "./queue.js";
+
+async function maybeCompleteCampaign(campaignRunId: string): Promise<void> {
+  const [pending] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(messages)
+    .where(
+      and(eq(messages.campaignRunId, campaignRunId), eq(messages.status, "queued"))
+    );
+  if ((pending?.count ?? 0) > 0) return;
+
+  const [run] = await db
+    .update(campaignRuns)
+    .set({ status: "completed", finishedAt: new Date() })
+    .where(
+      and(eq(campaignRuns.id, campaignRunId), ne(campaignRuns.status, "completed"))
+    )
+    .returning();
+  if (!run) return;
+
+  const [otherActive] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(campaignRuns)
+    .where(
+      and(
+        eq(campaignRuns.campaignId, run.campaignId),
+        ne(campaignRuns.status, "completed"),
+        ne(campaignRuns.status, "canceled"),
+        ne(campaignRuns.status, "failed")
+      )
+    );
+  if ((otherActive?.count ?? 0) > 0) return;
+
+  await db
+    .update(campaigns)
+    .set({ status: "completed", updatedAt: new Date() })
+    .where(and(eq(campaigns.id, run.campaignId), ne(campaigns.status, "canceled")));
+}
 
 export function startSendMessageWorker() {
   const worker = createSendMessageWorker(async (job) => {
@@ -44,6 +81,7 @@ export function startSendMessageWorker() {
         .set({
           status: "sent",
           sentAt: new Date(),
+          providerMsgId: result.messageId || null,
           error: null,
         })
         .where(eq(messages.id, messageId));
@@ -53,6 +91,7 @@ export function startSendMessageWorker() {
         .where(eq(campaignRuns.id, campaignRunId));
       await incrementDailyUsed(message.accountId);
       logger.debug({ messageId, externalId: result.messageId }, "message sent");
+      await maybeCompleteCampaign(campaignRunId);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       await db
@@ -63,6 +102,7 @@ export function startSendMessageWorker() {
         .update(campaignRuns)
         .set({ failedCount: sql`${campaignRuns.failedCount} + 1` })
         .where(eq(campaignRuns.id, campaignRunId));
+      await maybeCompleteCampaign(campaignRunId);
       throw err;
     }
   });

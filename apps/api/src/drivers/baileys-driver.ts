@@ -26,6 +26,9 @@ export class BaileysDriver implements WhatsAppDriver {
   private saveCreds: (() => Promise<void>) | null = null;
   private listeners = new Set<DriverListener>();
   private shouldReconnect = true;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshGroupsTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(accountId: string) {
     this.accountId = accountId;
@@ -58,7 +61,20 @@ export class BaileysDriver implements WhatsAppDriver {
       printQRInTerminal: false,
       syncFullHistory: false,
       markOnlineOnConnect: false,
-      logger: logger.child({ component: "baileys", accountId: this.accountId }) as never,
+      browser: ["BulkZap", "Chrome", "1.0.0"],
+      shouldIgnoreJid: (jid) => {
+        if (!jid) return false;
+        return (
+          jid.endsWith("@g.us") ||
+          jid === "status@broadcast" ||
+          jid.endsWith("@newsletter") ||
+          jid.endsWith("@broadcast")
+        );
+      },
+      logger: logger.child(
+        { component: "baileys", accountId: this.accountId },
+        { level: "warn" }
+      ) as never,
     });
 
     this.sock.ev.on("creds.update", () => {
@@ -98,17 +114,8 @@ export class BaileysDriver implements WhatsAppDriver {
       });
     });
 
-    this.sock.ev.on("groups.upsert", () => {
-      this.refreshGroups().catch((err) =>
-        logger.error({ err }, "failed to refresh groups on upsert")
-      );
-    });
-
-    this.sock.ev.on("groups.update", () => {
-      this.refreshGroups().catch((err) =>
-        logger.error({ err }, "failed to refresh groups on update")
-      );
-    });
+    this.sock.ev.on("groups.upsert", () => this.scheduleRefreshGroups());
+    this.sock.ev.on("groups.update", () => this.scheduleRefreshGroups());
 
     this.emit({ type: "connecting" });
   }
@@ -123,6 +130,7 @@ export class BaileysDriver implements WhatsAppDriver {
     }
 
     if (connection === "open") {
+      this.reconnectAttempts = 0;
       this.emit({ type: "connected" });
       this.refreshGroups().catch((err) =>
         logger.error({ err }, "initial groups refresh failed")
@@ -142,6 +150,12 @@ export class BaileysDriver implements WhatsAppDriver {
         return;
       }
 
+      if (statusCode === DisconnectReason.connectionReplaced) {
+        this.emit({ type: "banned", reason: "connection_replaced", statusCode });
+        this.shouldReconnect = false;
+        return;
+      }
+
       if (statusCode && BAN_STATUS_CODES.has(statusCode)) {
         this.emit({ type: "banned", reason, statusCode });
         this.shouldReconnect = false;
@@ -151,13 +165,33 @@ export class BaileysDriver implements WhatsAppDriver {
       this.emit({ type: "disconnected", reason, statusCode });
 
       if (this.shouldReconnect) {
-        setTimeout(() => {
+        const delay = Math.min(
+          3000 * 2 ** this.reconnectAttempts,
+          60_000
+        );
+        this.reconnectAttempts += 1;
+        logger.info(
+          { accountId: this.accountId, attempt: this.reconnectAttempts, delay, statusCode, reason },
+          "reconnecting baileys"
+        );
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
           this.connect().catch((err) =>
-            logger.error({ err }, "reconnect failed")
+            logger.error({ err, accountId: this.accountId }, "reconnect failed")
           );
-        }, 3000);
+        }, delay);
       }
     }
+  }
+
+  private scheduleRefreshGroups(): void {
+    if (this.refreshGroupsTimer) return;
+    this.refreshGroupsTimer = setTimeout(() => {
+      this.refreshGroupsTimer = null;
+      this.refreshGroups().catch((err) =>
+        logger.error({ err, accountId: this.accountId }, "scheduled refreshGroups failed")
+      );
+    }, 5000);
   }
 
   private async refreshGroups(): Promise<void> {
@@ -173,6 +207,14 @@ export class BaileysDriver implements WhatsAppDriver {
 
   async disconnect(): Promise<void> {
     this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.refreshGroupsTimer) {
+      clearTimeout(this.refreshGroupsTimer);
+      this.refreshGroupsTimer = null;
+    }
     if (this.sock) {
       this.sock.end(undefined);
       this.sock = null;
@@ -181,6 +223,14 @@ export class BaileysDriver implements WhatsAppDriver {
 
   async logout(): Promise<void> {
     this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.refreshGroupsTimer) {
+      clearTimeout(this.refreshGroupsTimer);
+      this.refreshGroupsTimer = null;
+    }
     if (this.sock) {
       try {
         await this.sock.logout();
@@ -196,6 +246,13 @@ export class BaileysDriver implements WhatsAppDriver {
     if (!this.sock) throw new Error("driver not connected");
     const result = await this.sock.sendMessage(to, { text });
     return { messageId: result?.key.id ?? "" };
+  }
+
+  async deleteMessage(to: string, providerMsgId: string): Promise<void> {
+    if (!this.sock) throw new Error("driver not connected");
+    await this.sock.sendMessage(to, {
+      delete: { remoteJid: to, fromMe: true, id: providerMsgId },
+    });
   }
 
   async listGroups(): Promise<GroupSummary[]> {

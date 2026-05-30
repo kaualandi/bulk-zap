@@ -24,6 +24,7 @@ export const campaignStatusEnum = pgEnum("campaign_status", [
   "paused",
   "completed",
   "failed",
+  "canceled",
 ]);
 
 export const campaigns = pgTable("campaigns", {

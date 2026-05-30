@@ -17,6 +17,12 @@ import {
 } from "@/components/ui/table";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Term } from "@/components/ui/term";
+import {
+  INBOUND_CLASSIFICATIONS,
+  blocklistSourceLabel,
+  inboundClassificationLabel,
+  inboundClassificationTone,
+} from "@/lib/labels";
 
 type Inbound = {
   id: string;
@@ -42,24 +48,6 @@ type Blocklist = {
   blockedAt: string;
 };
 
-const CLASSIF_LABEL: Record<string, string> = {
-  opt_out: "Opt-out",
-  interesse: "Interesse",
-  duvida: "Dúvida",
-  reclamacao: "Reclamação",
-  outro: "Outro",
-};
-
-const CLASSIF_TONE: Record<
-  string,
-  "neutral" | "info" | "danger" | "success" | "warning"
-> = {
-  opt_out: "danger",
-  interesse: "success",
-  duvida: "info",
-  reclamacao: "warning",
-  outro: "neutral",
-};
 
 export default function InboundPage() {
   const [items, setItems] = useState<Inbound[]>([]);
@@ -124,7 +112,7 @@ export default function InboundPage() {
                   <div className="font-mono text-xs text-zinc-700">{b.jid}</div>
                   <div className="text-xs text-zinc-500">
                     {b.reason} ·{" "}
-                    <Badge tone="neutral">{b.source}</Badge>
+                    <Badge tone="neutral">{blocklistSourceLabel(b.source)}</Badge>
                   </div>
                 </div>
                 <Button
@@ -165,8 +153,8 @@ export default function InboundPage() {
               </Td>
               <Td>
                 {i.classification ? (
-                  <Badge tone={CLASSIF_TONE[i.classification]}>
-                    {CLASSIF_LABEL[i.classification]}
+                  <Badge tone={inboundClassificationTone(i.classification)}>
+                    {inboundClassificationLabel(i.classification)}
                   </Badge>
                 ) : (
                   <span className="text-xs text-zinc-400">
@@ -195,7 +183,7 @@ export default function InboundPage() {
                   <option value="" disabled>
                     Reclassificar…
                   </option>
-                  {Object.entries(CLASSIF_LABEL).map(([key, label]) => (
+                  {Object.entries(INBOUND_CLASSIFICATIONS).map(([key, label]) => (
                     <option key={key} value={key}>
                       {label}
                     </option>

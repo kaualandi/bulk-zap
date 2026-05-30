@@ -5,6 +5,7 @@ import { api, type Contact } from "@/lib/api";
 import { PageHeader } from "@/components/ui/page-header";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { contactSourceLabel } from "@/lib/labels";
 import {
   EmptyRow,
   TBody,
@@ -65,7 +66,7 @@ export default function ContactsPage() {
               <Td>{c.pushName ?? <span className="text-zinc-400">—</span>}</Td>
               <Td className="font-mono text-xs text-zinc-500">{c.jid}</Td>
               <Td>
-                <Badge tone="neutral">{c.source}</Badge>
+                <Badge tone="neutral">{contactSourceLabel(c.source)}</Badge>
               </Td>
             </Tr>
           ))}
