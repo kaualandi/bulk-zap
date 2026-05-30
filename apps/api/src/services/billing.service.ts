@@ -38,6 +38,22 @@ async function getActiveSubscription(
 }
 
 /**
+ * The org's latest subscription row (any status), or null. Used by routes to
+ * avoid acting on a stale/cancelled row when an org re-subscribes over time.
+ */
+export async function getLatestSubscription(
+  orgId: string
+): Promise<Subscription | null> {
+  const [row] = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.organizationId, orgId))
+    .orderBy(desc(subscriptions.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Determine the billing period to align usage to. Uses the subscription's
  * current period if present, otherwise the current calendar month.
  */
@@ -161,14 +177,25 @@ export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
 }
 
 /**
- * Atomically increment the current-period dispatch counter.
+ * Atomically increment the current-period dispatch counter. The portion that
+ * lands beyond the plan's included quota is also tracked in `overageDispatches`
+ * so the UI / reports can distinguish included vs paid-extra usage.
  */
 export async function recordDispatch(orgId: string, n = 1): Promise<void> {
+  const active = await getActiveSubscription(orgId);
+  const included = active?.plan.includedDispatches ?? 0;
   const usage = await getOrCreateCurrentUsage(orgId);
+
+  // How many of these n dispatches fall into overage (count beyond `included`).
+  const before = usage.dispatchCount;
+  const after = before + n;
+  const overageDelta = Math.max(0, after - Math.max(included, before));
+
   await db
     .update(dispatchUsage)
     .set({
       dispatchCount: sql`${dispatchUsage.dispatchCount} + ${n}`,
+      overageDispatches: sql`${dispatchUsage.overageDispatches} + ${overageDelta}`,
       updatedAt: new Date(),
     })
     .where(eq(dispatchUsage.id, usage.id));

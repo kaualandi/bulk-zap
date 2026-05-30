@@ -7,6 +7,7 @@ import { authPlugin } from "../lib/auth-middleware.js";
 import {
   canDispatch,
   getBillingStatus,
+  getLatestSubscription,
   syncFromWebhook,
   type MpWebhookPayload,
 } from "../services/billing.service.js";
@@ -72,8 +73,22 @@ export const billingRoutes = new Elysia({ prefix: "/billing" })
   // Create a recurring subscription (MP preapproval). Returns init_point to redirect.
   .post(
     "/subscribe",
-    async ({ organizationId, user, body }) => {
+    async ({ organizationId, user, body, set }) => {
       if (!isMercadoPagoConfigured()) throw new MercadoPagoUnavailableError();
+
+      // Guard against re-subscribing to the SAME authorized plan (e.g. a
+      // double-click or a direct API call). Switching to a DIFFERENT plan is
+      // allowed and creates a new preapproval. A lingering `pending` is fine to
+      // supersede (the buyer may be retrying an unfinished checkout).
+      const existing = await getLatestSubscription(organizationId);
+      if (
+        existing &&
+        existing.status === "authorized" &&
+        existing.planId === body.planId
+      ) {
+        set.status = 409;
+        return { error: "already_subscribed" };
+      }
 
       const [plan] = await db
         .select()
@@ -104,13 +119,14 @@ export const billingRoutes = new Elysia({ prefix: "/billing" })
   // Cancel the org's active subscription at Mercado Pago and locally.
   .post(
     "/cancel",
-    async ({ organizationId }) => {
-      const [sub] = await db
-        .select()
-        .from(subscriptions)
-        .where(eq(subscriptions.organizationId, organizationId))
-        .limit(1);
+    async ({ organizationId, set }) => {
+      // Cancel the latest subscription, not an arbitrary row.
+      const sub = await getLatestSubscription(organizationId);
       if (!sub) return new Response("no subscription", { status: 404 });
+      if (sub.status === "cancelled") {
+        set.status = 409;
+        return { error: "already_cancelled" };
+      }
 
       if (sub.mpPreapprovalId && isMercadoPagoConfigured()) {
         await cancelSubscription(sub.mpPreapprovalId);

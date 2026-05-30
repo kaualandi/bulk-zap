@@ -112,6 +112,9 @@ function BillingInner() {
       if (err instanceof MercadoPagoUnavailableError) {
         setMpUnavailable(true);
         toast.error("Mercado Pago não está configurado no momento.");
+      } else if ((err as Error).message.includes("already_subscribed")) {
+        toast.error("Você já tem uma assinatura ativa neste plano.");
+        await refresh();
       } else {
         toast.error(`Erro ao assinar: ${(err as Error).message}`);
       }
@@ -133,7 +136,12 @@ function BillingInner() {
       toast.success("Assinatura cancelada.");
       await refresh();
     } catch (err) {
-      toast.error(`Erro ao cancelar: ${(err as Error).message}`);
+      if ((err as Error).message.includes("already_cancelled")) {
+        toast.info("Esta assinatura já estava cancelada.");
+        await refresh();
+      } else {
+        toast.error(`Erro ao cancelar: ${(err as Error).message}`);
+      }
     } finally {
       setActing(false);
     }

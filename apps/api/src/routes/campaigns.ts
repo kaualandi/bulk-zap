@@ -12,6 +12,7 @@ import {
   updateCampaign,
 } from "../services/campaign.service.js";
 import { validatePoolGroupMembership } from "../services/group-validation.service.js";
+import { canDispatch } from "../services/billing.service.js";
 
 /** Returns the campaign row only if it belongs to the org; null otherwise. */
 async function getOwnedCampaign(id: string, organizationId: string) {
@@ -157,7 +158,16 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
 
   .post(
     "/:id/launch",
-    async ({ params, query, organizationId }) => {
+    async ({ params, query, organizationId, set }) => {
+      // Pre-flight billing gate: fail fast with a clear error instead of
+      // enqueueing a run whose every message would be blocked in the worker.
+      // (The worker still re-checks per message — quota can run out mid-run.)
+      const gate = await canDispatch(organizationId);
+      if (!gate.allowed) {
+        set.status = 402; // Payment Required
+        return { error: "billing_blocked", reason: gate.reason };
+      }
+
       const respectSchedule = query.respectSchedule === "true";
       return await launchCampaign(params.id, organizationId, {
         respectSchedule,

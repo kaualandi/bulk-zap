@@ -141,7 +141,10 @@ export default function CampaignDetail() {
         result.scheduled
           ? `Agendado para ${new Date(result.startsAt).toLocaleString()}`
           : `Disparo iniciado (${result.enqueued} mensagens)`,
-      error: (err) => `Erro: ${(err as Error).message}`,
+      error: (err) =>
+        (err as Error).message.includes("billing_blocked")
+          ? "Disparos bloqueados pela cobrança. Verifique seu plano em Plano & Cobrança."
+          : `Erro: ${(err as Error).message}`,
     });
     try {
       await promise;
