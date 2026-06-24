@@ -9,6 +9,7 @@ import {
   lists,
   messages,
   templates,
+  whatsappAccounts,
   type Campaign,
 } from "@bulk-zap/db";
 import { db } from "../db.js";
@@ -36,6 +37,32 @@ export type CreateCampaignInput = {
   marketingConsentConfirmed?: string | null;
 };
 
+/**
+ * Reject if any account id in the pool does not belong to the org. Prevents a
+ * tenant from dispatching through (and getting billed/banned on) another org's
+ * WhatsApp number by passing foreign account ids in `accountPoolIds`.
+ */
+async function assertAccountsOwned(
+  accountPoolIds: string[],
+  organizationId: string
+): Promise<void> {
+  if (accountPoolIds.length === 0) return;
+  const owned = await db
+    .select({ id: whatsappAccounts.id })
+    .from(whatsappAccounts)
+    .where(
+      and(
+        inArray(whatsappAccounts.id, accountPoolIds),
+        eq(whatsappAccounts.organizationId, organizationId)
+      )
+    );
+  const ownedIds = new Set(owned.map((a) => a.id));
+  const foreign = accountPoolIds.filter((id) => !ownedIds.has(id));
+  if (foreign.length > 0) {
+    throw new Error("account not found");
+  }
+}
+
 /** Load a campaign only if it belongs to the org. Throws otherwise. */
 async function loadOwnedCampaign(
   campaignId: string,
@@ -58,6 +85,7 @@ async function loadOwnedCampaign(
 export async function createCampaign(
   input: CreateCampaignInput
 ): Promise<Campaign> {
+  await assertAccountsOwned(input.accountPoolIds, input.organizationId);
   const [row] = await db
     .insert(campaigns)
     .values({
@@ -115,7 +143,12 @@ async function loadTargets(listId: string, organizationId: string) {
     const rows = await db
       .select()
       .from(groupsTable)
-      .where(inArray(groupsTable.id, ids));
+      .where(
+        and(
+          inArray(groupsTable.id, ids),
+          eq(groupsTable.organizationId, organizationId)
+        )
+      );
     return rows.map((g) => ({
       type: "group" as const,
       id: g.id,
@@ -130,7 +163,12 @@ async function loadTargets(listId: string, organizationId: string) {
     const rows = await db
       .select()
       .from(contactsTable)
-      .where(inArray(contactsTable.id, ids));
+      .where(
+        and(
+          inArray(contactsTable.id, ids),
+          eq(contactsTable.organizationId, organizationId)
+        )
+      );
     const blocked = await db
       .select()
       .from(contactBlocklist)
@@ -209,7 +247,10 @@ export async function launchCampaign(
   let enqueued = 0;
 
   for (const target of targets) {
-    const accountId = await nextAccountFromPool(campaign.accountPoolIds);
+    const accountId = await nextAccountFromPool(
+      campaign.accountPoolIds,
+      organizationId
+    );
     if (!accountId) {
       // No account available; mark this target as failed at queue time.
       await db.insert(messages).values({
@@ -276,6 +317,9 @@ export async function updateCampaign(
   const existing = await loadOwnedCampaign(campaignId, organizationId);
   if (existing.status !== "draft") {
     throw new Error("only draft campaigns can be edited");
+  }
+  if (input.accountPoolIds) {
+    await assertAccountsOwned(input.accountPoolIds, organizationId);
   }
 
   const [row] = await db

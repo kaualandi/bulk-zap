@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
-import { and, eq } from "drizzle-orm";
-import { lists, listMembers } from "@bulk-zap/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { contacts, groups, lists, listMembers } from "@bulk-zap/db";
 import { db } from "../db.js";
 import { authPlugin } from "../lib/auth-middleware.js";
 
@@ -12,6 +12,51 @@ async function getOwnedList(id: string, organizationId: string) {
     .where(and(eq(lists.id, id), eq(lists.organizationId, organizationId)))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * True only if every supplied member targets a contact/group owned by the org.
+ * Prevents a tenant from seeding their list with another org's contact/group
+ * ids and then dispatching to (or reading) them via campaign launch.
+ */
+async function membersOwnedByOrg(
+  members: { targetType: "contact" | "group"; targetId: string }[],
+  organizationId: string
+): Promise<boolean> {
+  const contactIds = members
+    .filter((m) => m.targetType === "contact")
+    .map((m) => m.targetId);
+  const groupIds = members
+    .filter((m) => m.targetType === "group")
+    .map((m) => m.targetId);
+
+  if (contactIds.length > 0) {
+    const owned = await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(
+        and(
+          inArray(contacts.id, contactIds),
+          eq(contacts.organizationId, organizationId)
+        )
+      );
+    if (new Set(owned.map((r) => r.id)).size !== new Set(contactIds).size)
+      return false;
+  }
+  if (groupIds.length > 0) {
+    const owned = await db
+      .select({ id: groups.id })
+      .from(groups)
+      .where(
+        and(
+          inArray(groups.id, groupIds),
+          eq(groups.organizationId, organizationId)
+        )
+      );
+    if (new Set(owned.map((r) => r.id)).size !== new Set(groupIds).size)
+      return false;
+  }
+  return true;
 }
 
 export const listsRoutes = new Elysia({ prefix: "/lists" })
@@ -62,6 +107,8 @@ export const listsRoutes = new Elysia({ prefix: "/lists" })
     async ({ params, body, organizationId }) => {
       if (!(await getOwnedList(params.id, organizationId)))
         return new Response("not found", { status: 404 });
+      if (!(await membersOwnedByOrg(body.members, organizationId)))
+        return new Response("target not found", { status: 404 });
       for (const m of body.members) {
         await db
           .insert(listMembers)
