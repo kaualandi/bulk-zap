@@ -1,8 +1,52 @@
 # TODO — BulkZap
 
 Estado: branch `feat/auth-billing` (PR #1) adicionou auth + billing + multi-tenancy
-+ correções de segurança + créditos não-expiráveis/auto-recarga. **Feature-completo,
-mas pendente de validação contra banco/MP real.**
++ correções de segurança + créditos não-expiráveis/auto-recarga + onboarding
+(PRs #1 e #2, ambos mergeados no main). **Feature-completo, mas NADA rodou contra
+banco/MP real — só typecheck.**
+
+---
+
+## 0. 🚩 Veredito do conselho — NÃO é MVP lançável ainda (fazer antes de cobrar)
+
+Conselho (`/council`) avaliou se dá pra lançar pro cliente real pagar. Veredito:
+**não.** O escopo até sobra; o que falta é VALIDAR o núcleo (não tomar ban +
+cobrar) contra a realidade, e há bugs reais achados no código. "Lançável" pra 1
+cliente = **um número sobrevive 48h disparando em grupos reais sem `403`, e o
+dinheiro entra** — não é lançamento público de SaaS.
+
+### Bugs reais (verificados no código)
+- [ ] **Gate pool×grupo NÃO é aplicado no disparo.** `validatePoolGroupMembership`
+      só roda na rota read-only `/validate` (`campaigns.ts:105`); `launchCampaign`
+      NÃO chama. Contradiz o CLAUDE.md (gotcha #5, "hard block"). Disparar em grupo
+      onde o número não é membro → falha por target → **sinal de ban**. Corrigir:
+      chamar a validação no launch e retornar 402/erro se algum número do pool não
+      for membro de algum grupo alvo.
+- [ ] **`recordDispatch` roda DEPOIS do `sendText`, sem transação** — crash entre
+      enviar e contabilizar = mensagem enviada e não cobrada. Tornar atômico.
+- [ ] **Auto-recarga recusada só vira `logger.warn`** — saldo zera e o disparo
+      morre em silêncio. Notificar o cliente (email/UI) e não deixar falhar calado.
+- [ ] **Anti-ban sem throttle por idade de número.** Número novo no default
+      (`warmupMode=off`, `dailyLimit=null`) = ilimitado. É exatamente o cenário de
+      ban do cliente, nunca medido. Considerar teto conservador no dia 1.
+
+### Validação mínima — "ligar o motor" (não dá pra pular)
+- [ ] E2e real ponta-a-ponta: subir stack (PG + redis + `db:migrate` 0003/0004) +
+      **túnel (ngrok) pra `notification_url` do webhook MP** + sandbox MP com cartão
+      de teste + **parear número real via QR** + disparar em 3-5 grupos reais de
+      teste + **medir ban em 24-48h** + conferir débito de crédito no relatório.
+- [ ] ⚠️ Migrations multi-tenant **nunca aplicadas** — podem falhar em banco já
+      populado (`organization_id NOT NULL` sem backfill). Testar num dump real.
+
+### Estratégico (do conselho)
+- [ ] **Moat barato (Expansionista):** logar cada disparo com `(número, grupo,
+      baniu?)` — a tabela `events` já captura o `403` — e expor "seu número está
+      vivo há X dias · 0 bans". É o argumento de venda vs. DevZap.
+- [ ] **Fechar o loop de inbound** (já classifica com IA): segmentar/re-disparar
+      quem respondeu positivo, suprimir opt-out automático. Vira mini-CRM de grupo.
+- Nota (Primeiros Princípios): billing-MP/auto-recarga/multi-tenancy são
+      over-engenharia pra 1 cliente (Pix manual bastaria), mas JÁ estão prontos —
+      só não invista MAIS nisso antes de validar o núcleo.
 
 ---
 
