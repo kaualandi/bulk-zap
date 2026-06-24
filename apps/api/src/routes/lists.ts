@@ -137,11 +137,14 @@ export const listsRoutes = new Elysia({ prefix: "/lists" })
   .delete(
     "/:id",
     async ({ params, organizationId }) => {
-      await db
+      const deleted = await db
         .delete(lists)
         .where(
           and(eq(lists.id, params.id), eq(lists.organizationId, organizationId))
-        );
+        )
+        .returning({ id: lists.id });
+      if (deleted.length === 0)
+        return new Response("not found", { status: 404 });
       return { ok: true };
     },
     { auth: true }

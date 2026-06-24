@@ -54,17 +54,19 @@ export async function getLatestSubscription(
 }
 
 /**
- * Determine the billing period to align usage to. Uses the subscription's
- * current period if present, otherwise the current calendar month.
+ * The quota window is the current calendar month. Usage (`dispatch_usage`) is
+ * keyed by `(org, periodStart)`, so the window MUST advance predictably for the
+ * quota to roll over — it resets on the 1st of each month.
+ *
+ * We intentionally do NOT key the quota window off the subscription's MP period:
+ * the preapproval resource's `date_created` is static, so deriving periodStart
+ * from it never advances across renewals and the usage row would be reused
+ * forever (quota permanently exhausted after the first month). The subscription's
+ * `currentPeriodStart/End` are kept only as MP billing-cycle metadata for display
+ * in the billing UI, decoupled from the quota window.
  */
-function resolvePeriod(sub: Subscription | null): Period {
+function resolvePeriod(): Period {
   const now = new Date();
-  if (sub?.currentPeriodStart && sub.currentPeriodEnd) {
-    return {
-      periodStart: sub.currentPeriodStart,
-      periodEnd: sub.currentPeriodEnd,
-    };
-  }
   return {
     periodStart: startOfCalendarMonth(now),
     periodEnd: endOfCalendarMonth(now),
@@ -95,14 +97,12 @@ async function purchasedOverageForPeriod(
 }
 
 /**
- * Return/create the dispatch_usage row for the current period of an org.
- * Aligned to the active subscription period, or the calendar month otherwise.
+ * Return/create the dispatch_usage row for the current period (calendar month).
  */
 export async function getOrCreateCurrentUsage(
   orgId: string
 ): Promise<DispatchUsage> {
-  const active = await getActiveSubscription(orgId);
-  const period = resolvePeriod(active?.subscription ?? null);
+  const period = resolvePeriod();
 
   const [existing] = await db
     .select()
@@ -165,7 +165,7 @@ export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
     };
   }
 
-  const period = resolvePeriod(active.subscription);
+  const period = resolvePeriod();
   const usage = await getOrCreateCurrentUsage(orgId);
   const purchasedOverage = await purchasedOverageForPeriod(orgId, period);
   const quota = active.plan.includedDispatches + purchasedOverage;
@@ -229,7 +229,7 @@ export type BillingStatus = {
  */
 export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
   const active = await getActiveSubscription(orgId);
-  const period = resolvePeriod(active?.subscription ?? null);
+  const period = resolvePeriod();
   const usage = await getOrCreateCurrentUsage(orgId);
   const purchasedOverage = await purchasedOverageForPeriod(orgId, period);
   const included = active?.plan.includedDispatches ?? 0;

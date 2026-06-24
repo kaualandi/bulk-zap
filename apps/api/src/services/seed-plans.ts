@@ -5,6 +5,12 @@ import { db } from "../db.js";
 import { logger } from "../logger.js";
 
 // Default billing plans. Idempotent by slug — safe to call on every boot.
+//
+// `mpPreapprovalPlanId` is intentionally left unset: it links a plan to a
+// pre-created Mercado Pago preapproval-plan template, which requires a
+// configured MP account. When absent, createSubscription falls back to an
+// ad-hoc preapproval (see mercadopago.service.ts), which works fine. Populate
+// these ids only once MP preapproval-plan templates are created in the MP panel.
 const DEFAULT_PLANS: NewPlan[] = [
   {
     name: "Starter",

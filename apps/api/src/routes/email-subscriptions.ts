@@ -44,14 +44,17 @@ export const emailSubscriptionsRoutes = new Elysia({
   .delete(
     "/:id",
     async ({ params, organizationId }) => {
-      await db
+      const deleted = await db
         .delete(emailSubscriptions)
         .where(
           and(
             eq(emailSubscriptions.id, params.id),
             eq(emailSubscriptions.organizationId, organizationId)
           )
-        );
+        )
+        .returning({ id: emailSubscriptions.id });
+      if (deleted.length === 0)
+        return new Response("not found", { status: 404 });
       return { ok: true };
     },
     { auth: true }

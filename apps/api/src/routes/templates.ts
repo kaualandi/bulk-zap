@@ -77,14 +77,17 @@ export const templatesRoutes = new Elysia({ prefix: "/templates" })
   .delete(
     "/:id",
     async ({ params, organizationId }) => {
-      await db
+      const deleted = await db
         .delete(templates)
         .where(
           and(
             eq(templates.id, params.id),
             eq(templates.organizationId, organizationId)
           )
-        );
+        )
+        .returning({ id: templates.id });
+      if (deleted.length === 0)
+        return new Response("not found", { status: 404 });
       return { ok: true };
     },
     { auth: true }
