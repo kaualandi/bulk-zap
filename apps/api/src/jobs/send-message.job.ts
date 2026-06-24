@@ -4,7 +4,11 @@ import { db } from "../db.js";
 import { logger } from "../logger.js";
 import { getDriver } from "../services/account-manager.service.js";
 import { incrementDailyUsed } from "../services/anti-ban.service.js";
-import { canDispatch, recordDispatch } from "../services/billing.service.js";
+import {
+  canDispatch,
+  maybeTriggerAutoRecharge,
+  recordDispatch,
+} from "../services/billing.service.js";
 import { createSendMessageWorker } from "./queue.js";
 
 /**
@@ -127,22 +131,28 @@ export function startSendMessageWorker() {
 
     try {
       const result = await driver.sendText(message.targetJid, message.body);
-      await db
-        .update(messages)
-        .set({
-          status: "sent",
-          sentAt: new Date(),
-          providerMsgId: result.messageId || null,
-          error: null,
-        })
-        .where(eq(messages.id, messageId));
-      await db
-        .update(campaignRuns)
-        .set({ sentCount: sql`${campaignRuns.sentCount} + 1` })
-        .where(eq(campaignRuns.id, campaignRunId));
+      // Atomic: marking the message `sent` and counting/charging the dispatch
+      // commit together. Without this, a crash between the two would leave a
+      // sent-but-not-counted message (free dispatch).
+      await db.transaction(async (tx) => {
+        await tx
+          .update(messages)
+          .set({
+            status: "sent",
+            sentAt: new Date(),
+            providerMsgId: result.messageId || null,
+            error: null,
+          })
+          .where(eq(messages.id, messageId));
+        await tx
+          .update(campaignRuns)
+          .set({ sentCount: sql`${campaignRuns.sentCount} + 1` })
+          .where(eq(campaignRuns.id, campaignRunId));
+        await recordDispatch(orgId, 1, { exec: tx, deferAutoRecharge: true });
+      });
       await incrementDailyUsed(message.accountId);
-      // Count the successful dispatch against the org's billing quota.
-      await recordDispatch(orgId, 1);
+      // Auto-recharge is enqueued only after the count commits.
+      await maybeTriggerAutoRecharge(orgId);
       logger.debug({ messageId, externalId: result.messageId }, "message sent");
       await maybeCompleteCampaign(campaignRunId);
     } catch (err) {
