@@ -18,8 +18,6 @@ import {
   type GroupSummary,
 } from "./whatsapp-driver.js";
 
-const BAN_STATUS_CODES = new Set([401, 403, 440, 515]);
-
 export class BaileysDriver implements WhatsAppDriver {
   readonly accountId: string;
   private sock: WASocket | null = null;
@@ -143,22 +141,51 @@ export class BaileysDriver implements WhatsAppDriver {
       const statusCode = boom?.output?.statusCode;
       const reason = boom?.message ?? "unknown";
 
+      // 515 restartRequired: o Baileys pede um restart do socket logo após o
+      // pareamento (você escaneou o QR). NÃO é ban — reconectar conclui o
+      // handshake. Era a causa do "qr → connecting → banned".
+      if (statusCode === DisconnectReason.restartRequired) {
+        logger.info(
+          { accountId: this.accountId },
+          "baileys restartRequired — reconnecting to finish pairing"
+        );
+        this.reconnectAttempts = 0;
+        this.emit({ type: "connecting" });
+        void this.connect().catch((err) =>
+          logger.error(
+            { err, accountId: this.accountId },
+            "restart reconnect failed"
+          )
+        );
+        return;
+      }
+
+      // 403 forbidden: ban real do WhatsApp. Único caso que para por ban.
+      if (statusCode === DisconnectReason.forbidden) {
+        this.shouldReconnect = false;
+        this.emit({ type: "banned", reason, statusCode });
+        return;
+      }
+
+      // 401 loggedOut: device deslinkado / sessão invalidada. Precisa re-parear
+      // (novo QR), mas NÃO é ban. Limpa as creds e para.
       if (statusCode === DisconnectReason.loggedOut) {
         await clearAuthState(this.accountId);
-        this.emit({ type: "banned", reason: "logged_out" });
         this.shouldReconnect = false;
+        this.emit({ type: "disconnected", reason: "logged_out", statusCode });
         return;
       }
 
+      // 440 connectionReplaced: outro socket assumiu a sessão (ex.: restart do
+      // dev `bun --watch`, ou uma segunda conexão). NÃO é ban — para para não
+      // brigar com o socket que assumiu.
       if (statusCode === DisconnectReason.connectionReplaced) {
-        this.emit({ type: "banned", reason: "connection_replaced", statusCode });
         this.shouldReconnect = false;
-        return;
-      }
-
-      if (statusCode && BAN_STATUS_CODES.has(statusCode)) {
-        this.emit({ type: "banned", reason, statusCode });
-        this.shouldReconnect = false;
+        this.emit({
+          type: "disconnected",
+          reason: "connection_replaced",
+          statusCode,
+        });
         return;
       }
 

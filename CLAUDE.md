@@ -108,7 +108,11 @@ UI esconde features de grupo quando o número é Cloud API.
 - `warmupMode` é `off | auto | manual`, default `off`.
 - `dailyLimit` é **nullable** — null = sem limite.
 - Warnings em UI (em `/campaigns/new`) são informativos, com botão "Prosseguir mesmo assim".
-- Pause automático **só** quando ban acontece de verdade (`statusCode 401/403/440/515` em `connection.update`).
+- Pause por ban **só** acontece com `statusCode 403` (forbidden) em `connection.update` — é o **único** ban real do WhatsApp. Os outros status codes de desconexão são tratados em `baileys-driver.ts` e **não** são ban:
+  - `515` (restartRequired): sinal normal logo após escanear o QR — o driver **reconecta** sozinho pra concluir o pareamento.
+  - `440` (connectionReplaced): outro socket assumiu (ex.: restart do `bun --watch`) — desconecta sem reconectar.
+  - `401` (loggedOut): sessão deslinkada — limpa as creds e pede re-QR (não é ban).
+  - **Nunca** volte a tratar 515/440/401 como ban (bug histórico: o set `[401,403,440,515]` gerava `qr → connecting → banned` falso a cada pareamento).
 
 **A única coisa que bloqueia campanha é validação pool×grupo** (`group-validation.service.ts`).
 
