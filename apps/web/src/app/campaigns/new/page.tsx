@@ -174,10 +174,14 @@ export default function NewCampaignPage() {
         result.scheduled
           ? `Agendado: ${result.enqueued} mensagens começam em ${new Date(result.startsAt).toLocaleString()}`
           : `Disparo iniciado: ${result.enqueued} mensagens enfileiradas`,
-      error: (err) =>
-        (err as Error).message.includes("billing_blocked")
-          ? "Disparos bloqueados pela cobrança. Verifique seu plano em Plano & Cobrança."
-          : `Erro: ${(err as Error).message}`,
+      error: (err) => {
+        const msg = (err as Error).message;
+        if (msg.includes("billing_blocked"))
+          return "Disparos bloqueados pela cobrança. Verifique seu plano em Plano & Cobrança.";
+        if (msg.includes("pool_group_validation_failed"))
+          return "Bloqueado: algum número do pool não é membro de algum grupo alvo. Confira a validação pool×grupo antes de disparar.";
+        return `Erro: ${msg}`;
+      },
     });
     try {
       await promise;

@@ -11,7 +11,10 @@ import {
   pauseCampaign,
   updateCampaign,
 } from "../services/campaign.service.js";
-import { validatePoolGroupMembership } from "../services/group-validation.service.js";
+import {
+  PoolGroupValidationError,
+  validatePoolGroupMembership,
+} from "../services/group-validation.service.js";
 import { canDispatch } from "../services/billing.service.js";
 
 /** Returns the campaign row only if it belongs to the org; null otherwise. */
@@ -169,9 +172,18 @@ export const campaignsRoutes = new Elysia({ prefix: "/campaigns" })
       }
 
       const respectSchedule = query.respectSchedule === "true";
-      return await launchCampaign(params.id, organizationId, {
-        respectSchedule,
-      });
+      try {
+        return await launchCampaign(params.id, organizationId, {
+          respectSchedule,
+        });
+      } catch (err) {
+        // Hard gate pool×grupo: número do pool não é membro de algum grupo alvo.
+        if (err instanceof PoolGroupValidationError) {
+          set.status = 422; // Unprocessable Entity
+          return { error: "pool_group_validation_failed", missing: err.missing };
+        }
+        throw err;
+      }
     },
     {
       auth: true,

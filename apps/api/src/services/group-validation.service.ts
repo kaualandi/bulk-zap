@@ -20,6 +20,36 @@ export type ValidationResult = {
   missing: ValidationCell[];
 };
 
+/**
+ * Thrown by {@link assertPoolGroupMembership} when a group campaign is launched
+ * with a pool×group gap. Carries the missing (group, account) pairs so the route
+ * can return an actionable 422 instead of a generic 500.
+ */
+export class PoolGroupValidationError extends Error {
+  constructor(public readonly missing: ValidationCell[]) {
+    super("pool_group_validation_failed");
+    this.name = "PoolGroupValidationError";
+  }
+}
+
+/**
+ * Hard gate: throws {@link PoolGroupValidationError} if any pool number is not a
+ * member of any target group. No-op for non-group lists. This is the enforcement
+ * that must run on launch — `/validate` only *reports* the matrix to the UI.
+ */
+export async function assertPoolGroupMembership(
+  listId: string,
+  accountPoolIds: string[],
+  organizationId: string
+): Promise<void> {
+  const result = await validatePoolGroupMembership(
+    listId,
+    accountPoolIds,
+    organizationId
+  );
+  if (!result.ok) throw new PoolGroupValidationError(result.missing);
+}
+
 export async function validatePoolGroupMembership(
   listId: string,
   accountPoolIds: string[],
