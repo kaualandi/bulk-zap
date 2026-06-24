@@ -9,6 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 import { Term } from "@/components/ui/term";
+import {
+  accountStatusLabel,
+  accountStatusTone,
+  accountEventLabel,
+  warmupModeLabel,
+} from "@/lib/labels";
 
 type WsEvent =
   | { type: "qr"; qr: string; dataUrl: string }
@@ -18,16 +24,6 @@ type WsEvent =
   | { type: "banned"; reason?: string }
   | { type: "contacts-updated" }
   | { type: "groups-updated" };
-
-const statusTone: Record<
-  Account["status"],
-  "neutral" | "warning" | "success" | "danger"
-> = {
-  disconnected: "neutral",
-  connecting: "warning",
-  connected: "success",
-  banned: "danger",
-};
 
 export default function AccountDetailPage() {
   const params = useParams<{ id: string }>();
@@ -50,7 +46,7 @@ export default function AccountDetailPage() {
       const event = JSON.parse(e.data) as WsEvent;
       setEventLog((prev) =>
         [
-          `${new Date().toLocaleTimeString()} — ${event.type}`,
+          `${new Date().toLocaleTimeString()} — ${accountEventLabel(event.type)}`,
           ...prev,
         ].slice(0, 10)
       );
@@ -88,25 +84,27 @@ export default function AccountDetailPage() {
       <PageHeader
         title={account.displayName}
         description={
-          account.driver === "baileys"
-            ? "Driver Baileys (não-oficial, via QR Code). Suporta envio em grupos."
-            : "Driver Cloud API (oficial da Meta). Apenas mensagens 1-a-1."
+          account.driver === "baileys" ? (
+            <>
+              <Term k="driver">Driver</Term> Baileys (não-oficial, via QR Code).
+              Suporta envio em grupos.
+            </>
+          ) : (
+            <>
+              <Term k="driver">Driver</Term> Cloud API (oficial da Meta). Apenas
+              mensagens 1-a-1.
+            </>
+          )
         }
-        action={<Badge tone={statusTone[account.status]}>{account.status}</Badge>}
+        action={
+          <span className="flex items-center gap-2">
+            <Term k="status">Status</Term>
+            <Badge tone={accountStatusTone(account.status)}>
+              {accountStatusLabel(account.status)}
+            </Badge>
+          </span>
+        }
       />
-
-      <div className="text-sm text-zinc-600 mb-6 leading-relaxed flex flex-wrap gap-x-1">
-        <span>Termos:</span>
-        <Term k="qrCode">QR Code</Term>
-        <span>·</span>
-        <Term k="driver" />
-        <span>·</span>
-        <Term k="warmup">warmup</Term>
-        <span>·</span>
-        <Term k="dailyLimit">limite diário</Term>
-        <span>·</span>
-        <Term k="status">status</Term>
-      </div>
 
       {account.lastConnectionError && (
         <div className="mb-6">
@@ -139,9 +137,15 @@ export default function AccountDetailPage() {
           <CardHeader title="Configuração" />
           <CardBody>
             <dl className="grid grid-cols-2 gap-y-3 text-sm">
-              <dt className="text-zinc-500">Warmup</dt>
-              <dd className="text-zinc-900">{account.warmupMode}</dd>
-              <dt className="text-zinc-500">Limite diário</dt>
+              <dt className="text-zinc-500">
+                <Term k="warmup">Warmup</Term>
+              </dt>
+              <dd className="text-zinc-900">
+                {warmupModeLabel(account.warmupMode)}
+              </dd>
+              <dt className="text-zinc-500">
+                <Term k="dailyLimit">Limite diário</Term>
+              </dt>
               <dd className="text-zinc-900">
                 {account.dailyLimit ?? (
                   <span className="text-zinc-400">Sem limite</span>
@@ -160,7 +164,10 @@ export default function AccountDetailPage() {
         </Card>
 
         <Card className="w-fit">
-          <CardHeader title="QR Code" description="Escaneie no WhatsApp" />
+          <CardHeader
+            title={<Term k="qrCode">QR Code</Term>}
+            description="Escaneie no WhatsApp"
+          />
           <CardBody>
             {qrDataUrl ? (
               // eslint-disable-next-line @next/next/no-img-element

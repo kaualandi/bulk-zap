@@ -15,28 +15,12 @@ import {
   Th,
   Tr,
 } from "@/components/ui/table";
-
-const categoryTone: Record<
-  Campaign["category"],
-  "neutral" | "marketing" | "info" | "success"
-> = {
-  marketing: "marketing",
-  transacional: "info",
-  atendimento: "success",
-  outros: "neutral",
-};
-
-const statusTone: Record<
-  Campaign["status"],
-  "neutral" | "warning" | "info" | "success" | "danger"
-> = {
-  draft: "neutral",
-  scheduled: "info",
-  running: "warning",
-  paused: "neutral",
-  completed: "success",
-  failed: "danger",
-};
+import {
+  campaignCategoryLabel,
+  campaignCategoryTone,
+  campaignStatusLabel,
+  campaignStatusTone,
+} from "@/lib/labels";
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -78,10 +62,14 @@ export default function CampaignsPage() {
             <Tr key={c.id}>
               <Td className="font-medium text-zinc-900">{c.name}</Td>
               <Td>
-                <Badge tone={categoryTone[c.category]}>{c.category}</Badge>
+                <Badge tone={campaignCategoryTone(c.category)}>
+                  {campaignCategoryLabel(c.category)}
+                </Badge>
               </Td>
               <Td>
-                <Badge tone={statusTone[c.status]}>{c.status}</Badge>
+                <Badge tone={campaignStatusTone(c.status)}>
+                  {campaignStatusLabel(c.status)}
+                </Badge>
               </Td>
               <Td>
                 {c.accountPoolIds.length} número

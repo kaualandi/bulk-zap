@@ -108,7 +108,11 @@ UI esconde features de grupo quando o número é Cloud API.
 - `warmupMode` é `off | auto | manual`, default `off`.
 - `dailyLimit` é **nullable** — null = sem limite.
 - Warnings em UI (em `/campaigns/new`) são informativos, com botão "Prosseguir mesmo assim".
-- Pause automático **só** quando ban acontece de verdade (`statusCode 401/403/440/515` em `connection.update`).
+- Pause por ban **só** acontece com `statusCode 403` (forbidden) em `connection.update` — é o **único** ban real do WhatsApp. Os outros status codes de desconexão são tratados em `baileys-driver.ts` e **não** são ban:
+  - `515` (restartRequired): sinal normal logo após escanear o QR — o driver **reconecta** sozinho pra concluir o pareamento.
+  - `440` (connectionReplaced): outro socket assumiu (ex.: restart do `bun --watch`) — desconecta sem reconectar.
+  - `401` (loggedOut): sessão deslinkada — limpa as creds e pede re-QR (não é ban).
+  - **Nunca** volte a tratar 515/440/401 como ban (bug histórico: o set `[401,403,440,515]` gerava `qr → connecting → banned` falso a cada pareamento).
 
 **A única coisa que bloqueia campanha é validação pool×grupo** (`group-validation.service.ts`).
 
@@ -156,6 +160,35 @@ Cliente Anthropic em `apps/api/src/services/ai.service.ts`:
 Modelos:
 - `MODEL_HAIKU = "claude-haiku-4-5"` — classificação rápida, barata (~$0.0005/req).
 - `MODEL_SONNET = "claude-sonnet-4-6"` — geração criativa (~$0.003-0.005/req).
+
+### 9. Billing PRÉ-PAGO (mensalidade + franquia + créditos de excedente)
+
+Em `apps/api/src/services/billing.service.ts`. Mensalidade (assinatura recorrente
+via preapproval do MP) inclui uma franquia mensal (`includedDispatches`). Para
+passar da franquia, a org consome de um **saldo de créditos que NÃO expira**
+(`credit_accounts.balance`), comprado antes (Checkout Pro manual, `/billing/overage`)
+ou recarregado automático (cartão salvo). Cada compra aprovada credita o saldo via
+`creditApprovedPurchase` (idempotente pelo `mpPaymentId` único de `overage_purchases`).
+
+- **Franquia = mês calendário** (`resolvePeriod()`, sem parâmetro): `dispatch_usage`
+  (chaveado por `org+periodStart`) reseta no dia 1º. NÃO derive o período do ciclo
+  do MP (o `date_created` do preapproval é estático e o periodStart nunca avançaria).
+  O **saldo de créditos é independente do período** — não reseta.
+- **Gate (`canDispatch`)**: permitido se `dispatchCount < includedDispatches` (dentro
+  da franquia) OU `creditBalance > 0`; senão `quota_exceeded`. `recordDispatch` debita
+  o saldo na porção de excedente (GREATEST(...,0)).
+- **Auto-recarga (opt-in, cartão salvo / card-on-file)**: cartão salvo via MP
+  Customers/Cards (`saveCardForOrg`, token tokenizado no front com
+  `NEXT_PUBLIC_MP_PUBLIC_KEY`). `maybeTriggerAutoRecharge` (chamado no `recordDispatch`)
+  enfileira `auto-recharge.job.ts` quando `balance < threshold` — o UPDATE atômico em
+  `rechargePending` + jobId dedup evitam recarga dupla. O job cobra o cartão
+  (`chargeSavedCard`: gera card_token do cartão salvo + Payment) e credita. CAVEAT:
+  card-on-file sem CVV pode ser recusado por alguns emissores — falha graciosa (saldo
+  fica baixo, cliente compra manual).
+- **NÃO reintroduza pós-pago por mensagem** (faturar excedente no fechamento). Foi
+  tentado e revertido por decisão de conselho: pós-pago manual no Brasil tem
+  inadimplência estrutural + permite acúmulo ilimitado/fraude antes da cobrança.
+- `overage_purchases` é o ledger imutável das compras (manual + auto_recharge).
 
 ## Features de IA (todas opcionais via env)
 
@@ -262,6 +295,8 @@ Padrão visual: linha "Termos: A · B · C ·  ..." logo abaixo do `<PageHeader>
 9. **Inbound classification pode errar**: "Para mim, perfeito!" pode ser pego como opt-out. Threshold é confidence >= 0.7. UI permite reverter. Não baixe o threshold sem pensar.
 
 10. **JIDs de grupo terminam em `@g.us`**, contatos em `@s.whatsapp.net`. Filtramos grupos em `messages.upsert` para não tratar como inbound de pessoa.
+
+11. **`bun --watch` reinicia a sessão Baileys a cada save**: o socket morre e reconecta, e o celular pareado notifica "sincronização concluída" a cada ciclo. Em dev, com número pareado, prefira `cd apps/api && bun run start` (sem watch) para não inundar o celular de notificações. O reconnect tem backoff exponencial (3s → 60s) em `baileys-driver.ts`, mas evitar o ciclo é melhor.
 
 ## Roadmap conhecido (pós-MVP)
 

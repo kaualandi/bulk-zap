@@ -15,6 +15,27 @@
       "when": 1779281971817,
       "tag": "0001_married_anita_blake",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780026896589,
+      "tag": "0002_young_the_initiative",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780148838547,
+      "tag": "0003_nifty_smiling_tiger",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782333903210,
+      "tag": "0004_windy_photon",
+      "breakpoints": true
     }
   ]
 }

@@ -6,9 +6,11 @@ import {
   pgEnum,
   integer,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 import { templates } from "./templates.js";
 import { lists } from "./lists.js";
+import { organizations } from "./organizations.js";
 
 export const campaignCategoryEnum = pgEnum("campaign_category", [
   "marketing",
@@ -24,32 +26,42 @@ export const campaignStatusEnum = pgEnum("campaign_status", [
   "paused",
   "completed",
   "failed",
+  "canceled",
 ]);
 
-export const campaigns = pgTable("campaigns", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  category: campaignCategoryEnum("category").notNull().default("outros"),
-  templateId: uuid("template_id")
-    .notNull()
-    .references(() => templates.id, { onDelete: "restrict" }),
-  listId: uuid("list_id")
-    .notNull()
-    .references(() => lists.id, { onDelete: "restrict" }),
-  accountPoolIds: jsonb("account_pool_ids").$type<string[]>().notNull(),
-  scheduleAt: timestamp("schedule_at", { withTimezone: true }),
-  jitterMinMs: integer("jitter_min_ms").notNull().default(15000),
-  jitterMaxMs: integer("jitter_max_ms").notNull().default(90000),
-  dailyCapPerAccount: integer("daily_cap_per_account"),
-  status: campaignStatusEnum("status").notNull().default("draft"),
-  marketingConsentConfirmed: text("marketing_consent_confirmed"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const campaigns = pgTable(
+  "campaigns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    category: campaignCategoryEnum("category").notNull().default("outros"),
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => templates.id, { onDelete: "restrict" }),
+    listId: uuid("list_id")
+      .notNull()
+      .references(() => lists.id, { onDelete: "restrict" }),
+    accountPoolIds: jsonb("account_pool_ids").$type<string[]>().notNull(),
+    scheduleAt: timestamp("schedule_at", { withTimezone: true }),
+    jitterMinMs: integer("jitter_min_ms").notNull().default(15000),
+    jitterMaxMs: integer("jitter_max_ms").notNull().default(90000),
+    dailyCapPerAccount: integer("daily_cap_per_account"),
+    status: campaignStatusEnum("status").notNull().default("draft"),
+    marketingConsentConfirmed: text("marketing_consent_confirmed"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index("campaigns_org_idx").on(table.organizationId),
+  })
+);
 
 export const campaignRuns = pgTable("campaign_runs", {
   id: uuid("id").primaryKey().defaultRandom(),

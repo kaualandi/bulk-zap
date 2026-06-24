@@ -5,6 +5,7 @@ export const QUEUE_NAMES = {
   sendMessage: "send-message",
   warmupCheck: "warmup-check",
   classifyInbound: "classify-inbound",
+  autoRecharge: "auto-recharge",
 } as const;
 
 export type SendMessageJobData = {
@@ -16,6 +17,10 @@ export type WarmupCheckJobData = Record<string, never>;
 
 export type ClassifyInboundJobData = {
   inboundMessageId: string;
+};
+
+export type AutoRechargeJobData = {
+  organizationId: string;
 };
 
 export const sendMessageQueue = new Queue<SendMessageJobData>(
@@ -30,6 +35,11 @@ export const warmupCheckQueue = new Queue<WarmupCheckJobData>(
 
 export const classifyInboundQueue = new Queue<ClassifyInboundJobData>(
   QUEUE_NAMES.classifyInbound,
+  { connection: createBullConnection() }
+);
+
+export const autoRechargeQueue = new Queue<AutoRechargeJobData>(
+  QUEUE_NAMES.autoRecharge,
   { connection: createBullConnection() }
 );
 
@@ -59,4 +69,13 @@ export function createClassifyInboundWorker(
     processor,
     { connection: createBullConnection(), concurrency: 4 }
   );
+}
+
+export function createAutoRechargeWorker(
+  processor: (job: Job<AutoRechargeJobData>) => Promise<void>
+): Worker<AutoRechargeJobData> {
+  return new Worker<AutoRechargeJobData>(QUEUE_NAMES.autoRecharge, processor, {
+    connection: createBullConnection(),
+    concurrency: 1,
+  });
 }

@@ -1,19 +1,30 @@
 import { Elysia, t } from "elysia";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { emailSubscriptions } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { authPlugin } from "../lib/auth-middleware.js";
 
 export const emailSubscriptionsRoutes = new Elysia({
   prefix: "/email-subscriptions",
 })
-  .get("/", async () => await db.select().from(emailSubscriptions))
+  .use(authPlugin)
+  .get(
+    "/",
+    async ({ organizationId }) =>
+      await db
+        .select()
+        .from(emailSubscriptions)
+        .where(eq(emailSubscriptions.organizationId, organizationId)),
+    { auth: true }
+  )
 
   .post(
     "/",
-    async ({ body }) => {
+    async ({ body, organizationId }) => {
       const [row] = await db
         .insert(emailSubscriptions)
         .values({
+          organizationId,
           email: body.email,
           eventTypes: body.eventTypes ?? [],
           active: true,
@@ -22,6 +33,7 @@ export const emailSubscriptionsRoutes = new Elysia({
       return row;
     },
     {
+      auth: true,
       body: t.Object({
         email: t.String({ format: "email" }),
         eventTypes: t.Optional(t.Array(t.String())),
@@ -29,9 +41,21 @@ export const emailSubscriptionsRoutes = new Elysia({
     }
   )
 
-  .delete("/:id", async ({ params }) => {
-    await db
-      .delete(emailSubscriptions)
-      .where(eq(emailSubscriptions.id, params.id));
-    return { ok: true };
-  });
+  .delete(
+    "/:id",
+    async ({ params, organizationId }) => {
+      const deleted = await db
+        .delete(emailSubscriptions)
+        .where(
+          and(
+            eq(emailSubscriptions.id, params.id),
+            eq(emailSubscriptions.organizationId, organizationId)
+          )
+        )
+        .returning({ id: emailSubscriptions.id });
+      if (deleted.length === 0)
+        return new Response("not found", { status: 404 });
+      return { ok: true };
+    },
+    { auth: true }
+  );

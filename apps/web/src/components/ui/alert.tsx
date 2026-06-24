@@ -22,7 +22,7 @@ export function Alert({
   children,
 }: {
   tone?: Tone;
-  title?: string;
+  title?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (

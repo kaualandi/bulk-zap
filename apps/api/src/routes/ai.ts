@@ -1,5 +1,5 @@
 import { Elysia, t } from "elysia";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   campaignRuns,
   campaigns,
@@ -7,6 +7,7 @@ import {
   templates,
 } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { authPlugin } from "../lib/auth-middleware.js";
 import {
   AiUnavailableError,
   MODEL_HAIKU,
@@ -147,7 +148,9 @@ async function generateWithSafetyCheck(
 }
 
 export const aiRoutes = new Elysia({ prefix: "/ai" })
-  .get("/health", () => ({ available: isAiAvailable() }))
+  .use(authPlugin)
+  // health is public-ish but cheap; keep it behind auth for consistency.
+  .get("/health", () => ({ available: isAiAvailable() }), { auth: true })
 
   .post(
     "/risk-check",
@@ -177,6 +180,7 @@ export const aiRoutes = new Elysia({ prefix: "/ai" })
       return { ...result, cached: false };
     },
     {
+      auth: true,
       body: t.Object({
         text: t.String({ minLength: 1, maxLength: 4000 }),
         category: t.Optional(
@@ -203,6 +207,7 @@ export const aiRoutes = new Elysia({ prefix: "/ai" })
       return { variations };
     },
     {
+      auth: true,
       body: t.Object({
         description: t.String({ minLength: 5, maxLength: 500 }),
         category: t.Union([
@@ -240,6 +245,7 @@ ${body.poolAccounts
       });
     },
     {
+      auth: true,
       body: t.Object({
         category: t.Union([
           t.Literal("marketing"),
@@ -269,11 +275,16 @@ ${body.poolAccounts
 
   .post(
     "/templates/:id/variants",
-    async ({ params }) => {
+    async ({ params, organizationId }) => {
       const [tpl] = await db
         .select()
         .from(templates)
-        .where(eq(templates.id, params.id))
+        .where(
+          and(
+            eq(templates.id, params.id),
+            eq(templates.organizationId, organizationId)
+          )
+        )
         .limit(1);
       if (!tpl) return new Response("template not found", { status: 404 });
 
@@ -284,16 +295,21 @@ ${body.poolAccounts
       );
       return { variations };
     },
-    { params: t.Object({ id: t.String() }) }
+    { auth: true, params: t.Object({ id: t.String() }) }
   )
 
   .get(
     "/campaign/:id/summary",
-    async ({ params, set }) => {
+    async ({ params, set, organizationId }) => {
       const [campaign] = await db
         .select()
         .from(campaigns)
-        .where(eq(campaigns.id, params.id))
+        .where(
+          and(
+            eq(campaigns.id, params.id),
+            eq(campaigns.organizationId, organizationId)
+          )
+        )
         .limit(1);
       if (!campaign) {
         set.status = 404;
@@ -368,7 +384,7 @@ ${breakdown
         }
       );
     },
-    { params: t.Object({ id: t.String() }) }
+    { auth: true, params: t.Object({ id: t.String() }) }
   )
 
   .onError(({ error, set }) => {

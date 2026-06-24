@@ -1,9 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { cn } from "@/lib/cn";
 import { API_URL } from "@/lib/api";
+import { signOut, useSession } from "@/lib/auth-client";
 
 const nav = [
   { href: "/", label: "Dashboard" },
@@ -15,6 +18,7 @@ const nav = [
   { href: "/campaigns", label: "Campanhas" },
   { href: "/inbound", label: "Respostas" },
   { href: "/reports", label: "Relatórios" },
+  { href: "/billing", label: "Plano & Cobrança" },
 ];
 
 const externalNav = [
@@ -26,6 +30,18 @@ const externalNav = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { data: session } = useSession();
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    await signOut();
+    toast.success("Você saiu da conta.");
+    router.replace("/login");
+  }
+
+  const user = session?.user;
 
   return (
     <aside className="w-60 shrink-0 border-r border-zinc-200 bg-white min-h-screen flex flex-col">
@@ -79,10 +95,28 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="mt-auto p-4 border-t border-zinc-200">
-        <p className="text-xs text-zinc-400 leading-relaxed">
-          Disparos em grupos com anti-ban e fallback Cloud API.
-        </p>
+      <div className="mt-auto p-3 border-t border-zinc-200">
+        {user && (
+          <div className="flex items-center gap-3 px-2 py-2">
+            <div className="w-8 h-8 shrink-0 rounded-full bg-zinc-900 text-white flex items-center justify-center text-xs font-semibold uppercase">
+              {(user.name || user.email || "?").charAt(0)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-zinc-900 truncate">
+                {user.name || "Conta"}
+              </p>
+              <p className="text-xs text-zinc-500 truncate">{user.email}</p>
+            </div>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="mt-1 w-full px-3 py-2 rounded-md text-sm font-medium text-zinc-700 hover:bg-zinc-100 text-left transition-colors disabled:opacity-50"
+        >
+          {signingOut ? "Saindo…" : "Sair"}
+        </button>
       </div>
     </aside>
   );

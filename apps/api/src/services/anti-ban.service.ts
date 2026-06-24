@@ -8,7 +8,8 @@ export function pickJitter(minMs: number, maxMs: number): number {
 }
 
 export async function nextAccountFromPool(
-  poolIds: string[]
+  poolIds: string[],
+  organizationId: string
 ): Promise<string | null> {
   if (poolIds.length === 0) return null;
 
@@ -18,6 +19,7 @@ export async function nextAccountFromPool(
     .where(
       and(
         inArray(whatsappAccounts.id, poolIds),
+        eq(whatsappAccounts.organizationId, organizationId),
         eq(whatsappAccounts.status, "connected")
       )
     );

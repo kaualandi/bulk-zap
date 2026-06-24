@@ -16,6 +16,21 @@ const drivers = new Map<string, WhatsAppDriver>();
 const lastQr = new Map<string, string>();
 const broadcasters = new Map<string, Set<DriverListener>>();
 
+/**
+ * Resolve the owning organization for an account. whatsapp_accounts carries
+ * organization_id (NOT NULL); returns null only if the row is gone.
+ */
+async function resolveOrgIdForAccount(
+  accountId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ organizationId: whatsappAccounts.organizationId })
+    .from(whatsappAccounts)
+    .where(eq(whatsappAccounts.id, accountId))
+    .limit(1);
+  return row?.organizationId ?? null;
+}
+
 function broadcast(accountId: string, event: DriverEvent) {
   const set = broadcasters.get(accountId);
   if (!set) return;
@@ -86,12 +101,16 @@ export async function startAccount(accountId: string): Promise<void> {
         });
         drivers.delete(accountId);
         break;
-      case "contacts-updated":
-        await upsertSyncedContacts(accountId, event.contacts);
+      case "contacts-updated": {
+        const orgId = await resolveOrgIdForAccount(accountId);
+        if (orgId) await upsertSyncedContacts(accountId, orgId, event.contacts);
         break;
-      case "groups-updated":
-        await upsertSyncedGroups(accountId, event.groups);
+      }
+      case "groups-updated": {
+        const orgId = await resolveOrgIdForAccount(accountId);
+        if (orgId) await upsertSyncedGroups(accountId, orgId, event.groups);
         break;
+      }
       case "inbound-message": {
         const [row] = await db
           .insert(inboundMessages)

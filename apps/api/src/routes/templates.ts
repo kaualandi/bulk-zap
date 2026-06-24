@@ -1,7 +1,8 @@
 import { Elysia, t } from "elysia";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { templates } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { authPlugin } from "../lib/auth-middleware.js";
 
 function extractVariables(body: string): string[] {
   const set = new Set<string>();
@@ -12,19 +13,29 @@ function extractVariables(body: string): string[] {
 }
 
 export const templatesRoutes = new Elysia({ prefix: "/templates" })
-  .get("/", async () => await db.select().from(templates))
+  .use(authPlugin)
+  .get(
+    "/",
+    async ({ organizationId }) =>
+      await db
+        .select()
+        .from(templates)
+        .where(eq(templates.organizationId, organizationId)),
+    { auth: true }
+  )
 
   .post(
     "/",
-    async ({ body }) => {
+    async ({ body, organizationId }) => {
       const variables = extractVariables(body.body);
       const [row] = await db
         .insert(templates)
-        .values({ name: body.name, body: body.body, variables })
+        .values({ organizationId, name: body.name, body: body.body, variables })
         .returning();
       return row;
     },
     {
+      auth: true,
       body: t.Object({
         name: t.String({ minLength: 1 }),
         body: t.String({ minLength: 1 }),
@@ -34,7 +45,7 @@ export const templatesRoutes = new Elysia({ prefix: "/templates" })
 
   .put(
     "/:id",
-    async ({ params, body }) => {
+    async ({ params, body, organizationId }) => {
       const variables = extractVariables(body.body);
       const [row] = await db
         .update(templates)
@@ -44,11 +55,18 @@ export const templatesRoutes = new Elysia({ prefix: "/templates" })
           variables,
           updatedAt: new Date(),
         })
-        .where(eq(templates.id, params.id))
+        .where(
+          and(
+            eq(templates.id, params.id),
+            eq(templates.organizationId, organizationId)
+          )
+        )
         .returning();
+      if (!row) return new Response("not found", { status: 404 });
       return row;
     },
     {
+      auth: true,
       body: t.Object({
         name: t.String(),
         body: t.String(),
@@ -56,7 +74,21 @@ export const templatesRoutes = new Elysia({ prefix: "/templates" })
     }
   )
 
-  .delete("/:id", async ({ params }) => {
-    await db.delete(templates).where(eq(templates.id, params.id));
-    return { ok: true };
-  });
+  .delete(
+    "/:id",
+    async ({ params, organizationId }) => {
+      const deleted = await db
+        .delete(templates)
+        .where(
+          and(
+            eq(templates.id, params.id),
+            eq(templates.organizationId, organizationId)
+          )
+        )
+        .returning({ id: templates.id });
+      if (deleted.length === 0)
+        return new Response("not found", { status: 404 });
+      return { ok: true };
+    },
+    { auth: true }
+  );

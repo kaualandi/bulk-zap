@@ -7,9 +7,10 @@ import {
   type SignalDataTypeMap,
   type SignalKeyStore,
 } from "@whiskeysockets/baileys";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { baileysCreds, baileysKeys } from "@bulk-zap/db";
 import { db } from "../db.js";
+import { logger } from "../logger.js";
 
 type SignalCategory = keyof SignalDataTypeMap;
 
@@ -63,7 +64,15 @@ export async function usePostgresAuthState(accountId: string): Promise<{
     },
 
     async set(data) {
-      const inserts: Promise<unknown>[] = [];
+      type Row = {
+        accountId: string;
+        type: string;
+        keyId: string;
+        value: object;
+      };
+      const rowsToUpsert: Row[] = [];
+      const deletesByType = new Map<string, string[]>();
+
       for (const rawCategory of Object.keys(data)) {
         const category = rawCategory as SignalCategory;
         const bucket = data[category];
@@ -72,41 +81,61 @@ export async function usePostgresAuthState(accountId: string): Promise<{
         for (const id of Object.keys(bucket)) {
           const value = bucket[id];
           if (value) {
-            const payload = serialize(value);
-            inserts.push(
-              db
-                .insert(baileysKeys)
-                .values({
-                  accountId,
-                  type: category as string,
-                  keyId: id,
-                  value: payload as object,
-                })
-                .onConflictDoUpdate({
-                  target: [
-                    baileysKeys.accountId,
-                    baileysKeys.type,
-                    baileysKeys.keyId,
-                  ],
-                  set: { value: payload as object, updatedAt: new Date() },
-                })
-            );
+            rowsToUpsert.push({
+              accountId,
+              type: category as string,
+              keyId: id,
+              value: serialize(value) as object,
+            });
           } else {
-            inserts.push(
-              db
-                .delete(baileysKeys)
-                .where(
-                  and(
-                    eq(baileysKeys.accountId, accountId),
-                    eq(baileysKeys.type, category as string),
-                    eq(baileysKeys.keyId, id)
-                  )
-                )
-            );
+            const list = deletesByType.get(category as string) ?? [];
+            list.push(id);
+            deletesByType.set(category as string, list);
           }
         }
       }
-      await Promise.all(inserts);
+
+      try {
+        if (rowsToUpsert.length > 0) {
+          await db
+            .insert(baileysKeys)
+            .values(rowsToUpsert)
+            .onConflictDoUpdate({
+              target: [
+                baileysKeys.accountId,
+                baileysKeys.type,
+                baileysKeys.keyId,
+              ],
+              set: {
+                value: sql`excluded.value`,
+                updatedAt: sql`now()`,
+              },
+            });
+        }
+
+        for (const [type, ids] of deletesByType) {
+          await db
+            .delete(baileysKeys)
+            .where(
+              and(
+                eq(baileysKeys.accountId, accountId),
+                eq(baileysKeys.type, type),
+                inArray(baileysKeys.keyId, ids)
+              )
+            );
+        }
+      } catch (err) {
+        logger.error(
+          {
+            err,
+            accountId,
+            upsertCount: rowsToUpsert.length,
+            deleteTypes: [...deletesByType.keys()],
+          },
+          "session-store set failed"
+        );
+        throw err;
+      }
     },
   };
 

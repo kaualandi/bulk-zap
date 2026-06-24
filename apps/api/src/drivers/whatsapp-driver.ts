@@ -32,6 +32,7 @@ export interface WhatsAppDriver {
   logout(): Promise<void>;
 
   sendText(to: string, text: string): Promise<SendResult>;
+  deleteMessage(to: string, providerMsgId: string): Promise<void>;
 
   listGroups(): Promise<GroupSummary[]>;
   isMemberOfGroup(jid: string): Promise<boolean>;
