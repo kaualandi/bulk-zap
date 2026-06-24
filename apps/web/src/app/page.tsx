@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardBody } from "@/components/ui/card";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 
 const cards = [
   {
@@ -30,6 +31,8 @@ export default function Page() {
         title="BulkZap"
         description="Plataforma de disparos WhatsApp em grupos. Antes de mais nada, conecte um número e sincronize seus grupos."
       />
+
+      <OnboardingChecklist />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {cards.map((c) => (

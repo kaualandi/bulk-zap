@@ -233,3 +233,16 @@ export const billing = {
     packageQty: number;
   }) => api.put<{ ok: true } | { error: string }>("/billing/auto-recharge", cfg),
 };
+
+export type OnboardingStatus = {
+  hasSubscription: boolean;
+  hasConnectedAccount: boolean;
+  hasList: boolean;
+  hasTemplate: boolean;
+  hasDispatched: boolean;
+  allDone: boolean;
+};
+
+export const onboarding = {
+  getStatus: () => api.get<OnboardingStatus>("/onboarding/status"),
+};
