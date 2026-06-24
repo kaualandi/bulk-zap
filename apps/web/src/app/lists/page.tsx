@@ -6,9 +6,10 @@ import { api, type Contact, type Group, type List } from "@/lib/api";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input, Select, Field } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AddListModal } from "@/components/add-list-modal";
 import { cn } from "@/lib/cn";
 import { listTypeLabel } from "@/lib/labels";
 
@@ -16,10 +17,7 @@ export default function ListsPage() {
   const [lists, setLists] = useState<List[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [form, setForm] = useState({
-    name: "",
-    type: "groups" as List["type"],
-  });
+  const [modalOpen, setModalOpen] = useState(false);
   const [selected, setSelected] = useState<List | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [memberCounts, setMemberCounts] = useState<Record<string, number>>({});
@@ -34,19 +32,6 @@ export default function ListsPage() {
   useEffect(() => {
     refresh();
   }, []);
-
-  async function createList(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.name.trim()) return;
-    try {
-      await api.post("/lists", { name: form.name.trim(), type: form.type });
-      setForm({ name: "", type: "groups" });
-      refresh();
-      toast.success("Lista criada");
-    } catch (err) {
-      toast.error(`Erro ao criar lista: ${(err as Error).message}`);
-    }
-  }
 
   async function openList(l: List) {
     setSelected(l);
@@ -118,44 +103,16 @@ export default function ListsPage() {
       <PageHeader
         title="Listas"
         description="Agrupe grupos ou contatos em listas para reutilizar em campanhas."
+        action={
+          <Button onClick={() => setModalOpen(true)}>Nova lista</Button>
+        }
       />
 
-      <Card className="mb-8">
-        <CardHeader title="Criar lista" />
-        <CardBody>
-          <form
-            onSubmit={createList}
-            className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end"
-          >
-            <Field label="Nome">
-              <Input
-                placeholder="Ex: Grupos VIP"
-                value={form.name}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, name: e.target.value }))
-                }
-              />
-            </Field>
-            <Field label="Tipo">
-              <Select
-                value={form.type}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    type: e.target.value as List["type"],
-                  }))
-                }
-              >
-                <option value="groups">Grupos</option>
-                <option value="contacts">Contatos</option>
-              </Select>
-            </Field>
-            <div className="md:col-span-2">
-              <Button type="submit">Criar lista</Button>
-            </div>
-          </form>
-        </CardBody>
-      </Card>
+      <AddListModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onCreated={refresh}
+      />
 
       <div className="grid md:grid-cols-[320px_1fr] gap-6">
         <Card>

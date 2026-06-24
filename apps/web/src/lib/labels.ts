@@ -84,6 +84,16 @@ export const warmupModeLabel = makeLabel({
   manual: "Manual",
 });
 
+export const accountEventLabel = makeLabel({
+  qr: "QR Code gerado",
+  connecting: "Conectando…",
+  connected: "Conectado",
+  disconnected: "Desconectado",
+  banned: "Banido",
+  "contacts-updated": "Contatos atualizados",
+  "groups-updated": "Grupos atualizados",
+});
+
 export const contactSourceLabel = makeLabel({
   whatsapp_sync: "Sincronia WhatsApp",
   csv_import: "Importação CSV",

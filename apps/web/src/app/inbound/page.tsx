@@ -78,23 +78,23 @@ export default function InboundPage() {
     <div>
       <PageHeader
         title="Respostas (inbound)"
-        description="A IA lê cada resposta recebida e classifica em opt-out, interesse, dúvida, reclamação ou outro. Opt-outs vão automaticamente para a blocklist; você pode reverter qualquer classificação."
+        description={
+          <>
+            A IA lê cada resposta recebida (<Term k="inbound">inbound</Term>) e
+            classifica em <Term k="optOut">opt-out</Term>, interesse, dúvida,
+            reclamação ou outro. Opt-outs vão automaticamente para a blocklist;
+            você pode reverter qualquer classificação.
+          </>
+        }
       />
-
-      <div className="text-sm text-zinc-600 mb-6 leading-relaxed flex flex-wrap gap-x-1">
-        <span>Termos:</span>
-        <Term k="inbound" />
-        <span>·</span>
-        <Term k="optOut">opt-out</Term>
-        <span>·</span>
-        <Term k="blocklist" />
-        <span>·</span>
-        <Term k="confidence">confiança</Term>
-      </div>
 
       <Card className="mb-8">
         <CardHeader
-          title={`Blocklist (${blocklist.length})`}
+          title={
+            <>
+              <Term k="blocklist">Blocklist</Term> ({blocklist.length})
+            </>
+          }
           description="Contatos bloqueados — não receberão novas campanhas."
         />
         {blocklist.length === 0 ? (
@@ -137,7 +137,9 @@ export default function InboundPage() {
             <Th>De</Th>
             <Th>Mensagem</Th>
             <Th>Classificação</Th>
-            <Th>Confiança</Th>
+            <Th>
+              <Term k="confidence">Confiança</Term>
+            </Th>
             <Th>Recebida</Th>
             <Th></Th>
           </tr>

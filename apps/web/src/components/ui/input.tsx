@@ -36,8 +36,8 @@ export function Textarea({
 }
 
 type FieldProps = {
-  label: string;
-  hint?: string;
+  label: React.ReactNode;
+  hint?: React.ReactNode;
   children: React.ReactNode;
 };
 

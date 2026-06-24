@@ -308,21 +308,6 @@ export default function NewCampaignPage() {
         description="Configure template, lista, pool de números e parâmetros de envio."
       />
 
-      <div className="text-sm text-zinc-600 mb-6 leading-relaxed flex flex-wrap gap-x-1">
-        <span>Termos:</span>
-        <Term k="template">template</Term>
-        <span>·</span>
-        <Term k="pool">pool</Term>
-        <span>·</span>
-        <Term k="jitter">jitter</Term>
-        <span>·</span>
-        <Term k="marketing">marketing</Term>
-        <span>·</span>
-        <Term k="poolGroupValidation">validação pool × grupo</Term>
-        <span>·</span>
-        <Term k="lgpd">LGPD</Term>
-      </div>
-
       <Card>
         <CardHeader title="Detalhes" />
         <CardBody className="flex flex-col gap-5">
@@ -350,7 +335,7 @@ export default function NewCampaignPage() {
               </Select>
             </Field>
 
-            <Field label="Template">
+            <Field label={<Term k="template">Template</Term>}>
               <Select
                 value={templateId}
                 onChange={(e) => setTemplateId(e.target.value)}
@@ -370,9 +355,14 @@ export default function NewCampaignPage() {
           <Field
             label="Lista de destinatários"
             hint={
-              selectedList?.type === "groups"
-                ? "Lista de grupos: o sistema valida que todos os números do pool são membros de todos os grupos antes do envio."
-                : undefined
+              selectedList?.type === "groups" ? (
+                <>
+                  Lista de grupos: a{" "}
+                  <Term k="poolGroupValidation">validação pool × grupo</Term>{" "}
+                  exige que todos os números do pool sejam membros de todos os
+                  grupos antes do envio.
+                </>
+              ) : undefined
             }
           >
             <Select value={listId} onChange={(e) => setListId(e.target.value)}>
@@ -386,7 +376,11 @@ export default function NewCampaignPage() {
           </Field>
 
           <Field
-            label="Pool de números (rotação automática)"
+            label={
+              <>
+                <Term k="pool">Pool de números</Term> (rotação automática)
+              </>
+            }
             hint="Os números marcados são revezados durante o disparo."
           >
             <div className="border border-zinc-300 rounded-md max-h-56 overflow-auto bg-white divide-y divide-zinc-100">
@@ -438,7 +432,7 @@ export default function NewCampaignPage() {
           )}
 
           <div className="grid md:grid-cols-3 gap-5">
-            <Field label="Jitter mínimo (s)">
+            <Field label={<><Term k="jitter">Jitter</Term> mínimo (s)</>}>
               <Input
                 type="number"
                 min={1}
@@ -464,7 +458,14 @@ export default function NewCampaignPage() {
           </div>
 
           {category === "marketing" && (
-            <Alert tone="warning" title="Consent LGPD obrigatório">
+            <Alert
+              tone="warning"
+              title={
+                <>
+                  Consent <Term k="lgpd">LGPD</Term> obrigatório
+                </>
+              }
+            >
               <label className="flex items-start gap-2 mt-1">
                 <input
                   type="checkbox"
@@ -473,8 +474,9 @@ export default function NewCampaignPage() {
                   className="mt-0.5"
                 />
                 <span>
-                  Confirmo que tenho base legal (LGPD) para enviar marketing
-                  aos destinatários desta campanha.
+                  Confirmo que tenho base legal (<Term k="lgpd">LGPD</Term>) para
+                  enviar <Term k="marketing">marketing</Term> aos destinatários
+                  desta campanha.
                 </span>
               </label>
             </Alert>
