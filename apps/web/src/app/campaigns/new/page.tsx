@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   api,
+  onboarding,
   type Account,
   type Campaign,
   type List,
@@ -60,11 +62,16 @@ export default function NewCampaignPage() {
     estimatedMs: number;
   } | null>(null);
   const [launching, setLaunching] = useState(false);
+  const [needsSubscription, setNeedsSubscription] = useState(false);
 
   useEffect(() => {
     api.get<Account[]>("/accounts").then(setAccounts);
     api.get<List[]>("/lists").then(setLists);
     api.get<Template[]>("/templates").then(setTemplates);
+    onboarding
+      .getStatus()
+      .then((s) => setNeedsSubscription(!s.hasSubscription))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -188,6 +195,19 @@ export default function NewCampaignPage() {
     return `${hours}h ${rem}min`;
   }
 
+  const subscribeBanner = needsSubscription && (
+    <div className="mb-6">
+      <Alert tone="warning" title="Assine para disparar">
+        Você pode montar a campanha agora, mas o disparo só é liberado com um
+        plano ativo.{" "}
+        <Link href="/billing" className="font-medium underline">
+          Escolher plano
+        </Link>
+        .
+      </Alert>
+    </div>
+  );
+
   if (createdCampaign) {
     return (
       <div>
@@ -195,6 +215,8 @@ export default function NewCampaignPage() {
           title={`Revisar: ${createdCampaign.name}`}
           description="Última conferência antes de iniciar o disparo."
         />
+
+        {subscribeBanner}
 
         <div className="flex flex-col gap-4">
           {estimate && (
@@ -307,6 +329,8 @@ export default function NewCampaignPage() {
         title="Nova campanha"
         description="Configure template, lista, pool de números e parâmetros de envio."
       />
+
+      {subscribeBanner}
 
       <Card>
         <CardHeader title="Detalhes" />

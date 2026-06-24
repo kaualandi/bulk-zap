@@ -13,6 +13,7 @@ import { emailSubscriptionsRoutes } from "./routes/email-subscriptions.js";
 import { aiRoutes } from "./routes/ai.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { billingRoutes } from "./routes/billing.js";
+import { onboardingRoutes } from "./routes/onboarding.js";
 import { startClassifyInboundWorker } from "./jobs/classify-inbound.job.js";
 import { createBullBoardApp } from "./admin/bull-board.js";
 import { bootAllConnected } from "./services/account-manager.service.js";
@@ -42,7 +43,8 @@ const app = new Elysia()
   .use(emailSubscriptionsRoutes)
   .use(aiRoutes)
   .use(inboundRoutes)
-  .use(billingRoutes);
+  .use(billingRoutes)
+  .use(onboardingRoutes);
 
 if (bullBoardApp) {
   app.all("/admin/queues", ({ request }) => bullBoardApp.fetch(request));

@@ -27,11 +27,14 @@ Nada nesta branch rodou contra Postgres/MP de verdade nesta sessão (sem ambient
 
 Ou seja: **org nova sem plano não dispara nada.** Isso é o gate de onboarding.
 
-- [ ] **Onboarding guiado/conversacional**: após signup, funil claro
-      (1) assinar plano → (2) conectar número (QR) → (3) criar lista/template → (4) disparar.
-      O bloqueio sem plano é o gate do passo 1.
-- [ ] **UX do bloqueio**: em `/campaigns/new`, deixar explícito o motivo `no_subscription`
-      com CTA "Assinar um plano" (hoje o motivo só aparece com clareza na página `/billing`)
+- [x] **Onboarding guiado (checklist híbrido)** — `GET /onboarding/status` +
+      `OnboardingChecklist` no dashboard: 5 passos (assinar → conectar número →
+      lista → template → 1ª campanha), "assinar" destacado como gate do disparo;
+      some quando completo. _(branch `feat/onboarding`)_
+- [x] **UX do bloqueio** — banner "Assine para disparar" com CTA pra `/billing`
+      em `/campaigns/new`.
+- [ ] _(futuro)_ Onboarding **conversacional** (IA guiando o setup) — hoje é
+      checklist; evoluir pra chat só se fizer sentido com mais clientes.
 
 ---
 
