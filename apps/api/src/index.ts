@@ -18,6 +18,7 @@ import { createBullBoardApp } from "./admin/bull-board.js";
 import { bootAllConnected } from "./services/account-manager.service.js";
 import { startSendMessageWorker } from "./jobs/send-message.job.js";
 import { startWarmupCheckWorker } from "./jobs/warmup-check.job.js";
+import { startCloseBillingPeriodWorker } from "./jobs/close-billing-period.job.js";
 import { auth } from "./services/auth.service.js";
 import { seedPlans } from "./services/seed-plans.js";
 
@@ -57,6 +58,7 @@ logger.info(
 startSendMessageWorker();
 startWarmupCheckWorker();
 startClassifyInboundWorker();
+startCloseBillingPeriodWorker();
 
 bootAllConnected().catch((err) =>
   logger.error({ err }, "bootAllConnected failed")

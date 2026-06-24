@@ -9,6 +9,7 @@ import { env } from "../env.js";
 import { logger } from "../logger.js";
 import {
   classifyInboundQueue,
+  closeBillingPeriodQueue,
   sendMessageQueue,
   warmupCheckQueue,
 } from "../jobs/queue.js";
@@ -33,6 +34,7 @@ export function createBullBoardApp(): BullBoardApp {
       new BullMQAdapter(sendMessageQueue),
       new BullMQAdapter(warmupCheckQueue),
       new BullMQAdapter(classifyInboundQueue),
+      new BullMQAdapter(closeBillingPeriodQueue),
     ],
     serverAdapter,
     options: {

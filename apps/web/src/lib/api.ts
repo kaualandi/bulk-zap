@@ -136,6 +136,21 @@ export type SubscriptionStatus =
   | "paused"
   | "cancelled";
 
+export type OverageInvoice = {
+  id: string;
+  organizationId: string;
+  periodStart: string;
+  periodEnd: string;
+  dispatches: number;
+  amountCents: number;
+  mpPreferenceId: string | null;
+  mpInitPoint: string | null;
+  mpPaymentId: string | null;
+  status: string; // pending | paid | void
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type BillingStatus = {
   subscription: {
     id: string;
@@ -150,10 +165,24 @@ export type BillingStatus = {
     periodEnd: string;
     dispatchCount: number;
     includedDispatches: number;
-    purchasedOverage: number;
-    quota: number;
-    remaining: number;
+    // Mensagens já enviadas além da franquia neste período (pós-pago).
+    overageDispatches: number;
+    // Custo acumulado do excedente deste período, em centavos (será faturado).
+    overageAmountCents: number;
+    // Preço por mensagem excedente, em centavos (pode ser fracionário).
+    perMessageCents: number;
   };
+  // Fatura de excedente em aberto (período fechado, não paga), se houver.
+  openInvoice: Pick<
+    OverageInvoice,
+    | "id"
+    | "periodStart"
+    | "periodEnd"
+    | "dispatches"
+    | "amountCents"
+    | "status"
+    | "mpInitPoint"
+  > | null;
   canDispatch: {
     allowed: boolean;
     reason?: string;
@@ -163,12 +192,7 @@ export type BillingStatus = {
 
 export type SubscribeResult = { initPoint: string; preapprovalId: string };
 
-export type OverageResult = {
-  initPoint: string;
-  preferenceId: string;
-  dispatches: number;
-  amountCents: number;
-};
+export type PayInvoiceResult = { initPoint: string; amountCents: number };
 
 /**
  * Thrown when the billing backend reports Mercado Pago is not configured (503).
@@ -202,9 +226,12 @@ export const billing = {
     }
   },
   cancel: () => api.post<{ ok: true }>("/billing/cancel"),
-  buyOverage: async (packageQty: number): Promise<OverageResult> => {
+  listInvoices: () => api.get<OverageInvoice[]>("/billing/invoices"),
+  payInvoice: async (invoiceId: string): Promise<PayInvoiceResult> => {
     try {
-      return await api.post<OverageResult>("/billing/overage", { packageQty });
+      return await api.post<PayInvoiceResult>(
+        `/billing/invoices/${invoiceId}/pay`
+      );
     } catch (err) {
       if (isUnavailable(err)) throw new MercadoPagoUnavailableError();
       throw err;

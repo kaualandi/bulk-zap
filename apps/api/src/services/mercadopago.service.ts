@@ -99,40 +99,39 @@ export async function pauseSubscription(mpPreapprovalId: string) {
   });
 }
 
-export type CreateOveragePaymentResult = {
+export type CreateInvoicePaymentResult = {
   preferenceId: string;
   initPoint: string;
 };
 
 /**
- * Create a one-off Checkout Pro Preference for an overage package purchase.
- * `external_reference` encodes org + package qty so the webhook can credit it:
- *   "overage:<orgId>:<dispatches>"
+ * Create a one-off Checkout Pro Preference to settle a post-paid overage invoice.
+ * `external_reference` encodes the invoice id so the webhook can mark it paid:
+ *   "overage_invoice:<invoiceId>"
  */
-export async function createOveragePayment(
-  orgId: string,
-  pkg: { dispatches: number; amountCents: number }
-): Promise<CreateOveragePaymentResult> {
+export async function createOverageInvoicePayment(
+  invoiceId: string,
+  invoice: { dispatches: number; amountCents: number }
+): Promise<CreateInvoicePaymentResult> {
   const client = new Preference(getConfig());
-  const externalReference = `overage:${orgId}:${pkg.dispatches}`;
 
   const res = await client.create({
     body: {
-      external_reference: externalReference,
+      external_reference: `overage_invoice:${invoiceId}`,
       back_urls: {
         success: `${env.APP_URL}/billing`,
         pending: `${env.APP_URL}/billing`,
         failure: `${env.APP_URL}/billing`,
       },
       auto_return: "approved",
-      metadata: { kind: "overage", organizationId: orgId, dispatches: pkg.dispatches },
+      metadata: { kind: "overage_invoice", invoiceId },
       items: [
         {
-          id: `overage-${pkg.dispatches}`,
-          title: `Pacote de ${pkg.dispatches} disparos`,
+          id: `overage-invoice-${invoiceId}`,
+          title: `Excedente de ${invoice.dispatches.toLocaleString("pt-BR")} mensagens`,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: pkg.amountCents / 100,
+          unit_price: invoice.amountCents / 100,
         },
       ],
     },

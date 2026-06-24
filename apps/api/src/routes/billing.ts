@@ -5,15 +5,18 @@ import { db } from "../db.js";
 import { logger } from "../logger.js";
 import { authPlugin } from "../lib/auth-middleware.js";
 import {
+  attachInvoiceCheckout,
   canDispatch,
   getBillingStatus,
   getLatestSubscription,
+  getOwnedInvoice,
+  listInvoices,
   syncFromWebhook,
   type MpWebhookPayload,
 } from "../services/billing.service.js";
 import {
   cancelSubscription,
-  createOveragePayment,
+  createOverageInvoicePayment,
   createSubscription,
   getPayment,
   getPreapproval,
@@ -141,43 +144,39 @@ export const billingRoutes = new Elysia({ prefix: "/billing" })
     { auth: true }
   )
 
-  // Buy an overage package (one-off Checkout Pro). Returns checkout url.
+  // List the org's post-paid overage invoices (most recent first).
+  .get(
+    "/invoices",
+    async ({ organizationId }) => await listInvoices(organizationId),
+    { auth: true }
+  )
+
+  // Get (or lazily create) the Checkout Pro link to pay an overage invoice.
   .post(
-    "/overage",
-    async ({ organizationId, body }) => {
+    "/invoices/:id/pay",
+    async ({ params, organizationId, set }) => {
       if (!isMercadoPagoConfigured()) throw new MercadoPagoUnavailableError();
 
-      // Resolve unit pricing from the org's plan; fall back to the cheapest plan.
-      const [sub] = await db
-        .select({ plan: plans })
-        .from(subscriptions)
-        .innerJoin(plans, eq(subscriptions.planId, plans.id))
-        .where(eq(subscriptions.organizationId, organizationId))
-        .limit(1);
-
-      let pricingPlan = sub?.plan;
-      if (!pricingPlan) {
-        const [cheapest] = await db
-          .select()
-          .from(plans)
-          .where(eq(plans.active, true))
-          .orderBy(asc(plans.monthlyPriceCents))
-          .limit(1);
-        pricingPlan = cheapest;
+      const invoice = await getOwnedInvoice(params.id, organizationId);
+      if (!invoice) return new Response("invoice not found", { status: 404 });
+      if (invoice.status === "paid") {
+        set.status = 409;
+        return { error: "already_paid" };
       }
-      if (!pricingPlan) return new Response("no plan to price overage", { status: 400 });
 
-      const dispatches = body.packageQty * pricingPlan.overagePackageSize;
-      const amountCents = body.packageQty * pricingPlan.overagePackagePriceCents;
+      // Reuse the existing checkout if the cron already created one.
+      if (invoice.mpInitPoint) {
+        return { initPoint: invoice.mpInitPoint, amountCents: invoice.amountCents };
+      }
 
-      const { initPoint, preferenceId } = await createOveragePayment(
-        organizationId,
-        { dispatches, amountCents }
+      const { initPoint, preferenceId } = await createOverageInvoicePayment(
+        invoice.id,
+        { dispatches: invoice.dispatches, amountCents: invoice.amountCents }
       );
-
-      return { initPoint, preferenceId, dispatches, amountCents };
+      await attachInvoiceCheckout(invoice.id, preferenceId, initPoint);
+      return { initPoint, amountCents: invoice.amountCents };
     },
-    { auth: true, body: t.Object({ packageQty: t.Integer({ minimum: 1, maximum: 100 }) }) }
+    { auth: true }
   )
 
   // Mercado Pago webhook. PUBLIC: validates HMAC signature, then syncs.

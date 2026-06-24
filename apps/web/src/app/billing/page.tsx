@@ -62,8 +62,8 @@ const REASON_COPY: Record<string, string> = {
     "Sua assinatura está pausada. Regularize o pagamento no Mercado Pago para voltar a disparar.",
   subscription_cancelled:
     "Sua assinatura foi cancelada. Assine um plano para voltar a disparar.",
-  quota_exceeded:
-    "Você atingiu o limite de disparos do período. Compre um pacote de excedente para continuar.",
+  overage_invoice_unpaid:
+    "Há uma fatura de excedente em aberto de um período anterior. Pague-a para voltar a disparar.",
 };
 
 function BillingInner() {
@@ -147,17 +147,20 @@ function BillingInner() {
     }
   }
 
-  async function handleBuyOverage(packageQty: number) {
+  async function handlePayInvoice(invoiceId: string) {
     setActing(true);
     try {
-      const { initPoint } = await billing.buyOverage(packageQty);
+      const { initPoint } = await billing.payInvoice(invoiceId);
       window.location.href = initPoint;
     } catch (err) {
       if (err instanceof MercadoPagoUnavailableError) {
         setMpUnavailable(true);
         toast.error("Mercado Pago não está configurado no momento.");
+      } else if ((err as Error).message.includes("already_paid")) {
+        toast.info("Esta fatura já foi paga.");
+        await refresh();
       } else {
-        toast.error(`Erro ao comprar excedente: ${(err as Error).message}`);
+        toast.error(`Erro ao pagar fatura: ${(err as Error).message}`);
       }
       setActing(false);
     }
@@ -168,7 +171,7 @@ function BillingInner() {
       <div>
         <PageHeader
           title="Plano & Cobrança"
-          description="Gerencie sua assinatura, consumo de disparos e pacotes de excedente."
+          description="Gerencie sua assinatura, consumo de disparos e o excedente por mensagem."
         />
         <p className="text-sm text-zinc-400">Carregando…</p>
       </div>
@@ -178,28 +181,23 @@ function BillingInner() {
   const sub = status?.subscription ?? null;
   const usage = status?.usage;
   const canDispatch = status?.canDispatch;
+  const openInvoice = status?.openInvoice ?? null;
   const activePlanId = sub?.plan.id ?? null;
   const isActive = sub?.status === "authorized";
-
-  // Overage package pricing derived from the org plan, else cheapest plan.
-  const overagePlan =
-    sub?.plan ??
-    [...plans].sort((a, b) => a.monthlyPriceCents - b.monthlyPriceCents)[0] ??
-    null;
 
   return (
     <div>
       <PageHeader
         title="Plano & Cobrança"
-        description="Gerencie sua assinatura, consumo de disparos e pacotes de excedente."
+        description="Gerencie sua assinatura, consumo de disparos e o excedente por mensagem."
       />
 
       {mpUnavailable && (
         <div className="mb-6">
           <Alert tone="warning" title="Pagamentos indisponíveis">
             A integração com o Mercado Pago não está configurada no momento.
-            Assinaturas e compras de excedente estão temporariamente
-            desativadas.
+            Assinaturas e pagamento de faturas estão temporariamente
+            desativados.
           </Alert>
         </div>
       )}
@@ -209,6 +207,33 @@ function BillingInner() {
           <Alert tone="danger" title="Disparos bloqueados">
             {REASON_COPY[canDispatch.reason] ??
               "Os disparos estão bloqueados pelas regras de cobrança."}
+          </Alert>
+        </div>
+      )}
+
+      {openInvoice && openInvoice.status !== "paid" && (
+        <div className="mb-6">
+          <Alert tone="warning" title="Fatura de excedente em aberto">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                Excedente de{" "}
+                {openInvoice.dispatches.toLocaleString("pt-BR")} mensagens (
+                {formatDate(openInvoice.periodStart)} →{" "}
+                {formatDate(openInvoice.periodEnd)}):{" "}
+                <span className="font-semibold">
+                  {formatCents(openInvoice.amountCents)}
+                </span>
+                .
+              </span>
+              {!mpUnavailable && (
+                <Button
+                  disabled={acting}
+                  onClick={() => handlePayInvoice(openInvoice.id)}
+                >
+                  Pagar fatura ({formatCents(openInvoice.amountCents)})
+                </Button>
+              )}
+            </div>
           </Alert>
         </div>
       )}
@@ -251,22 +276,22 @@ function BillingInner() {
                 <UsageMeter
                   used={usage.dispatchCount}
                   included={usage.includedDispatches}
-                  overage={usage.purchasedOverage}
+                  overageDispatches={usage.overageDispatches}
+                  overageAmountCents={usage.overageAmountCents}
                 />
               )}
 
+              {usage && usage.perMessageCents > 0 && (
+                <p className="text-xs text-zinc-500">
+                  Cada mensagem acima da franquia custa{" "}
+                  <span className="font-medium text-zinc-700">
+                    {formatCents(usage.perMessageCents)}
+                  </span>
+                  , cobrado em fatura no fechamento do mês.
+                </p>
+              )}
+
               <div className="flex flex-wrap gap-3 pt-2 border-t border-zinc-100">
-                {overagePlan && !mpUnavailable && (
-                  <Button
-                    variant="secondary"
-                    disabled={acting}
-                    onClick={() => handleBuyOverage(1)}
-                  >
-                    Comprar pacote de excedente (
-                    {overagePlan.overagePackageSize.toLocaleString("pt-BR")} por{" "}
-                    {formatCents(overagePlan.overagePackagePriceCents)})
-                  </Button>
-                )}
                 {sub.status !== "cancelled" && (
                   <Button
                     variant="danger"
@@ -288,7 +313,8 @@ function BillingInner() {
                 <UsageMeter
                   used={usage.dispatchCount}
                   included={usage.includedDispatches}
-                  overage={usage.purchasedOverage}
+                  overageDispatches={usage.overageDispatches}
+                  overageAmountCents={usage.overageAmountCents}
                 />
               )}
             </div>
@@ -350,17 +376,13 @@ function BillingInner() {
                     <li className="flex items-baseline gap-2">
                       <span>Excedente:</span>
                       <span className="text-zinc-900 font-medium">
-                        {formatCents(plan.overagePackagePriceCents)}
+                        {formatCents(perThousand)}
                       </span>
-                      <span>
-                        por {plan.overagePackageSize.toLocaleString("pt-BR")}
-                      </span>
+                      <span>a cada 1.000 mensagens extras</span>
                     </li>
-                    {perThousand > 0 && (
-                      <li className="text-xs text-zinc-400">
-                        ≈ {formatCents(perThousand)} a cada 1.000 disparos extras
-                      </li>
-                    )}
+                    <li className="text-xs text-zinc-400">
+                      Pós-pago: o excedente é faturado no fechamento do mês.
+                    </li>
                   </ul>
 
                   <div className="mt-6">
