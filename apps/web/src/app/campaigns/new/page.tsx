@@ -99,6 +99,16 @@ export default function NewCampaignPage() {
     category === "marketing" &&
     poolAccounts.some((a) => a.warmupMode === "off");
 
+  // Aviso (não bloqueia — anti-ban "avisa, nunca bloqueia"): número novo no pool
+  // dispara muito risco de ban em volume alto. Default é sem limite diário.
+  const NEW_NUMBER_DAYS = 7;
+  const hasNewNumberRisk = poolAccounts.some((a) => {
+    // Date.now() basta pra um aviso informativo; staleness não importa aqui.
+    // eslint-disable-next-line react-hooks/purity
+    const ageMs = Date.now() - new Date(a.createdAt).getTime();
+    return ageMs / 86_400_000 < NEW_NUMBER_DAYS && a.dailyLimit == null;
+  });
+
   const selectedTemplate = useMemo(
     () => templates.find((t) => t.id === templateId),
     [templates, templateId]
@@ -515,6 +525,15 @@ export default function NewCampaignPage() {
               Pelo menos um número do pool está sem warmup e a campanha é
               marketing — risco alto de ban. Considere distribuir entre mais
               números ou ativar warmup automático.
+            </Alert>
+          )}
+
+          {hasNewNumberRisk && (
+            <Alert tone="warning" title="Número novo no pool">
+              Há número(s) conectado(s) há menos de {NEW_NUMBER_DAYS} dias e sem
+              limite diário. Número novo tem muito mais risco de ban em volume
+              alto — comece com poucos grupos, mantenha o jitter alto e considere
+              ativar o warmup automático antes de escalar.
             </Alert>
           )}
 
