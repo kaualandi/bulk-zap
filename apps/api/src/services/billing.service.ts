@@ -1,14 +1,21 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import {
+  creditAccounts,
   dispatchUsage,
   organizations,
   overagePurchases,
   plans,
   subscriptions,
 } from "@bulk-zap/db";
-import type { DispatchUsage, Plan, Subscription } from "@bulk-zap/db";
+import type {
+  CreditAccount,
+  DispatchUsage,
+  Plan,
+  Subscription,
+} from "@bulk-zap/db";
 import { db } from "../db.js";
 import { logger } from "../logger.js";
+import { autoRechargeQueue } from "../jobs/queue.js";
 
 // ---- Period helpers ---------------------------------------------------------
 
@@ -35,6 +42,12 @@ async function getActiveSubscription(
     .orderBy(desc(subscriptions.createdAt))
     .limit(1);
   return row ?? null;
+}
+
+/** The plan of the org's active subscription, or null. */
+export async function getOrgPlan(orgId: string): Promise<Plan | null> {
+  const active = await getActiveSubscription(orgId);
+  return active?.plan ?? null;
 }
 
 /**
@@ -73,27 +86,148 @@ function resolvePeriod(): Period {
   };
 }
 
+// ---- Credit balance (non-expiring) -----------------------------------------
+
 /**
- * Sum overage dispatches purchased (status approved/paid) for an org within the period.
+ * Return/create the org's credit account. `balance` is the pool of overage
+ * dispatches available beyond the monthly franchise — it does NOT expire.
  */
-async function purchasedOverageForPeriod(
-  orgId: string,
-  period: Period
-): Promise<number> {
+export async function getOrCreateCreditAccount(
+  orgId: string
+): Promise<CreditAccount> {
+  const [existing] = await db
+    .select()
+    .from(creditAccounts)
+    .where(eq(creditAccounts.organizationId, orgId))
+    .limit(1);
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(creditAccounts)
+    .values({ organizationId: orgId, balance: 0 })
+    .onConflictDoNothing({ target: creditAccounts.organizationId })
+    .returning();
+  if (created) return created;
+
   const [row] = await db
-    .select({
-      total: sql<number>`coalesce(sum(${overagePurchases.dispatches}), 0)::int`,
+    .select()
+    .from(creditAccounts)
+    .where(eq(creditAccounts.organizationId, orgId))
+    .limit(1);
+  return row!;
+}
+
+/**
+ * Atomically add `dispatches` credits to the org's balance (e.g. when a purchase
+ * is approved). Lazily creates the account.
+ */
+export async function addCredits(
+  orgId: string,
+  dispatches: number
+): Promise<void> {
+  if (dispatches <= 0) return;
+  await getOrCreateCreditAccount(orgId);
+  await db
+    .update(creditAccounts)
+    .set({
+      balance: sql`${creditAccounts.balance} + ${dispatches}`,
+      updatedAt: new Date(),
     })
-    .from(overagePurchases)
+    .where(eq(creditAccounts.organizationId, orgId));
+}
+
+/** Persist the org's auto-recharge configuration. */
+export async function setAutoRecharge(
+  orgId: string,
+  cfg: { enabled: boolean; threshold: number | null; packageQty: number }
+): Promise<void> {
+  await getOrCreateCreditAccount(orgId);
+  await db
+    .update(creditAccounts)
+    .set({
+      autoRechargeEnabled: cfg.enabled,
+      autoRechargeThreshold: cfg.threshold,
+      autoRechargePackageQty: cfg.packageQty,
+      updatedAt: new Date(),
+    })
+    .where(eq(creditAccounts.organizationId, orgId));
+}
+
+/** Persist the saved card (Mercado Pago Customers/Cards) on the credit account. */
+export async function setSavedCard(
+  orgId: string,
+  card: {
+    mpCustomerId: string;
+    mpCardId: string;
+    cardLast4: string;
+    cardBrand: string;
+  }
+): Promise<void> {
+  await getOrCreateCreditAccount(orgId);
+  await db
+    .update(creditAccounts)
+    .set({ ...card, updatedAt: new Date() })
+    .where(eq(creditAccounts.organizationId, orgId));
+}
+
+/** Forget the saved card (keeps the MP customer id for reuse). */
+export async function clearSavedCard(orgId: string): Promise<void> {
+  await db
+    .update(creditAccounts)
+    .set({
+      mpCardId: null,
+      cardLast4: null,
+      cardBrand: null,
+      autoRechargeEnabled: false,
+      updatedAt: new Date(),
+    })
+    .where(eq(creditAccounts.organizationId, orgId));
+}
+
+/**
+ * Enqueue an auto-recharge if the org is below its threshold, has a saved card,
+ * and isn't already recharging. The atomic UPDATE...WHERE...RETURNING is the lock:
+ * it flips `rechargePending` to true ONLY when every condition holds, so at most
+ * one job is enqueued per low-balance episode (BullMQ jobId dedups further).
+ */
+async function maybeTriggerAutoRecharge(orgId: string): Promise<void> {
+  const claimed = await db
+    .update(creditAccounts)
+    .set({ rechargePending: true, updatedAt: new Date() })
     .where(
       and(
-        eq(overagePurchases.organizationId, orgId),
-        eq(overagePurchases.status, "approved"),
-        sql`${overagePurchases.createdAt} >= ${period.periodStart}`,
-        sql`${overagePurchases.createdAt} < ${period.periodEnd}`
+        eq(creditAccounts.organizationId, orgId),
+        eq(creditAccounts.autoRechargeEnabled, true),
+        eq(creditAccounts.rechargePending, false),
+        isNotNull(creditAccounts.mpCardId),
+        isNotNull(creditAccounts.autoRechargeThreshold),
+        sql`${creditAccounts.balance} < ${creditAccounts.autoRechargeThreshold}`
       )
-    );
-  return row?.total ?? 0;
+    )
+    .returning({ organizationId: creditAccounts.organizationId });
+  if (claimed.length === 0) return;
+
+  await autoRechargeQueue
+    .add(
+      "recharge",
+      { organizationId: orgId },
+      { jobId: `recharge:${orgId}`, removeOnComplete: true, removeOnFail: 50 }
+    )
+    .catch(async (err) => {
+      logger.error({ err, orgId }, "failed to enqueue auto-recharge; releasing lock");
+      await db
+        .update(creditAccounts)
+        .set({ rechargePending: false, updatedAt: new Date() })
+        .where(eq(creditAccounts.organizationId, orgId));
+    });
+}
+
+/** Release the auto-recharge lock (called by the job when it finishes). */
+export async function releaseRechargeLock(orgId: string): Promise<void> {
+  await db
+    .update(creditAccounts)
+    .set({ rechargePending: false, updatedAt: new Date() })
+    .where(eq(creditAccounts.organizationId, orgId));
 }
 
 /**
@@ -149,9 +283,10 @@ export async function getOrCreateCurrentUsage(
 export type CanDispatchResult = { allowed: boolean; reason?: string };
 
 /**
- * Billing gate (SEPARATE from anti-ban warnings). An org may dispatch only if:
- *  - it has a subscription with status = 'authorized', AND
- *  - current-period dispatchCount < plan.includedDispatches + purchased overage.
+ * Billing gate (SEPARATE from anti-ban warnings). Pre-paid credit model: an org
+ * may dispatch only if it has an `authorized` subscription AND either it's still
+ * within the monthly franchise (`dispatchCount < includedDispatches`) OR it has a
+ * positive non-expiring credit balance to cover the excess.
  */
 export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
   const active = await getActiveSubscription(orgId);
@@ -165,21 +300,23 @@ export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
     };
   }
 
-  const period = resolvePeriod();
   const usage = await getOrCreateCurrentUsage(orgId);
-  const purchasedOverage = await purchasedOverageForPeriod(orgId, period);
-  const quota = active.plan.includedDispatches + purchasedOverage;
-
-  if (usage.dispatchCount >= quota) {
-    return { allowed: false, reason: "quota_exceeded" };
+  if (usage.dispatchCount < active.plan.includedDispatches) {
+    return { allowed: true };
   }
-  return { allowed: true };
+
+  const account = await getOrCreateCreditAccount(orgId);
+  if (account.balance > 0) {
+    return { allowed: true };
+  }
+  return { allowed: false, reason: "quota_exceeded" };
 }
 
 /**
- * Atomically increment the current-period dispatch counter. The portion that
- * lands beyond the plan's included quota is also tracked in `overageDispatches`
- * so the UI / reports can distinguish included vs paid-extra usage.
+ * Atomically increment the current-period dispatch counter and debit credits for
+ * the portion that lands beyond the plan's franchise. The overage count is also
+ * tracked in `overageDispatches` for the UI/reports. Triggers auto-recharge when
+ * the resulting balance dips below the configured threshold.
  */
 export async function recordDispatch(orgId: string, n = 1): Promise<void> {
   const active = await getActiveSubscription(orgId);
@@ -199,6 +336,18 @@ export async function recordDispatch(orgId: string, n = 1): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(dispatchUsage.id, usage.id));
+
+  // Debit non-expiring credits for the overage portion (floored at 0).
+  if (overageDelta > 0) {
+    await db
+      .update(creditAccounts)
+      .set({
+        balance: sql`GREATEST(${creditAccounts.balance} - ${overageDelta}, 0)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(creditAccounts.organizationId, orgId));
+    await maybeTriggerAutoRecharge(orgId);
+  }
 }
 
 export type BillingStatus = {
@@ -217,9 +366,15 @@ export type BillingStatus = {
     periodEnd: Date;
     dispatchCount: number;
     includedDispatches: number;
-    purchasedOverage: number;
-    quota: number;
-    remaining: number;
+  };
+  /** Saldo de créditos de excedente disponíveis (não expira). */
+  creditBalance: number;
+  /** Cartão salvo (card-on-file), se houver. */
+  card: { last4: string; brand: string } | null;
+  autoRecharge: {
+    enabled: boolean;
+    threshold: number | null;
+    packageQty: number;
   };
   canDispatch: CanDispatchResult;
 };
@@ -229,11 +384,9 @@ export type BillingStatus = {
  */
 export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
   const active = await getActiveSubscription(orgId);
-  const period = resolvePeriod();
   const usage = await getOrCreateCurrentUsage(orgId);
-  const purchasedOverage = await purchasedOverageForPeriod(orgId, period);
+  const account = await getOrCreateCreditAccount(orgId);
   const included = active?.plan.includedDispatches ?? 0;
-  const quota = included + purchasedOverage;
   const gate = await canDispatch(orgId);
 
   return {
@@ -252,9 +405,16 @@ export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
       periodEnd: usage.periodEnd,
       dispatchCount: usage.dispatchCount,
       includedDispatches: included,
-      purchasedOverage,
-      quota,
-      remaining: Math.max(0, quota - usage.dispatchCount),
+    },
+    creditBalance: account.balance,
+    card:
+      account.mpCardId && account.cardLast4 && account.cardBrand
+        ? { last4: account.cardLast4, brand: account.cardBrand }
+        : null,
+    autoRecharge: {
+      enabled: account.autoRechargeEnabled,
+      threshold: account.autoRechargeThreshold,
+      packageQty: account.autoRechargePackageQty,
     },
     canDispatch: gate,
   };
@@ -376,35 +536,79 @@ async function syncPayment(
     return;
   }
 
-  const mappedStatus = status === "approved" ? "approved" : status || "pending";
   const transactionAmount = resource?.transaction_amount as number | undefined;
   const amountCents = transactionAmount ? Math.round(transactionAmount * 100) : 0;
   const mpPaymentId = String(paymentId);
 
-  // Idempotent on mpPaymentId.
-  const [existing] = await db
-    .select()
-    .from(overagePurchases)
-    .where(eq(overagePurchases.mpPaymentId, mpPaymentId))
-    .limit(1);
-
-  if (existing) {
-    if (existing.status !== mappedStatus) {
-      await db
-        .update(overagePurchases)
-        .set({ status: mappedStatus })
-        .where(eq(overagePurchases.id, existing.id));
-    }
+  if (status === "approved") {
+    await creditApprovedPurchase({
+      orgId,
+      dispatches,
+      amountCents,
+      mpPaymentId,
+      source: "manual",
+    });
     return;
   }
 
-  await db.insert(overagePurchases).values({
-    organizationId: orgId,
-    dispatches,
-    amountCents,
-    mpPaymentId,
-    status: mappedStatus,
-  });
+  // Non-approved: record a pending ledger row (no credit) if none exists yet.
+  await db
+    .insert(overagePurchases)
+    .values({
+      organizationId: orgId,
+      dispatches,
+      amountCents,
+      mpPaymentId,
+      status: status || "pending",
+    })
+    .onConflictDoNothing({ target: overagePurchases.mpPaymentId });
+}
+
+/**
+ * Idempotently mark an overage purchase approved and credit the balance EXACTLY
+ * once — whether the row already existed (pending → approved) or is brand new,
+ * and regardless of which path (webhook vs auto-recharge job) gets here first.
+ * Keyed on the unique `mpPaymentId`.
+ */
+export async function creditApprovedPurchase(input: {
+  orgId: string;
+  dispatches: number;
+  amountCents: number;
+  mpPaymentId: string;
+  source: "manual" | "auto_recharge";
+}): Promise<void> {
+  // Flip an existing not-yet-approved row to approved (credits the row's amount).
+  const flipped = await db
+    .update(overagePurchases)
+    .set({ status: "approved" })
+    .where(
+      and(
+        eq(overagePurchases.mpPaymentId, input.mpPaymentId),
+        sql`${overagePurchases.status} <> 'approved'`
+      )
+    )
+    .returning({ dispatches: overagePurchases.dispatches });
+  if (flipped.length > 0) {
+    await addCredits(input.orgId, flipped[0]!.dispatches);
+    return;
+  }
+
+  // No row to flip: either none yet (insert + credit) or already approved (no-op).
+  const inserted = await db
+    .insert(overagePurchases)
+    .values({
+      organizationId: input.orgId,
+      dispatches: input.dispatches,
+      amountCents: input.amountCents,
+      mpPaymentId: input.mpPaymentId,
+      source: input.source,
+      status: "approved",
+    })
+    .onConflictDoNothing({ target: overagePurchases.mpPaymentId })
+    .returning({ id: overagePurchases.id });
+  if (inserted.length > 0) {
+    await addCredits(input.orgId, input.dispatches);
+  }
 }
 
 /**

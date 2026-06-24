@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { UsageMeter } from "@/components/usage-meter";
+import { CardManager } from "@/components/card-manager";
 import { cn } from "@/lib/cn";
 
 const brl = new Intl.NumberFormat("pt-BR", {
@@ -63,7 +64,7 @@ const REASON_COPY: Record<string, string> = {
   subscription_cancelled:
     "Sua assinatura foi cancelada. Assine um plano para voltar a disparar.",
   quota_exceeded:
-    "Você atingiu o limite de disparos do período. Compre um pacote de excedente para continuar.",
+    "Sua franquia acabou e o saldo de créditos está zerado. Adicione créditos (ou ative a auto-recarga) para continuar disparando.",
 };
 
 function BillingInner() {
@@ -168,7 +169,7 @@ function BillingInner() {
       <div>
         <PageHeader
           title="Plano & Cobrança"
-          description="Gerencie sua assinatura, consumo de disparos e pacotes de excedente."
+          description="Gerencie sua assinatura, créditos de excedente e auto-recarga."
         />
         <p className="text-sm text-zinc-400">Carregando…</p>
       </div>
@@ -191,15 +192,15 @@ function BillingInner() {
     <div>
       <PageHeader
         title="Plano & Cobrança"
-        description="Gerencie sua assinatura, consumo de disparos e pacotes de excedente."
+        description="Gerencie sua assinatura, créditos de excedente e auto-recarga."
       />
 
       {mpUnavailable && (
         <div className="mb-6">
           <Alert tone="warning" title="Pagamentos indisponíveis">
             A integração com o Mercado Pago não está configurada no momento.
-            Assinaturas e compras de excedente estão temporariamente
-            desativadas.
+            Assinaturas, créditos e auto-recarga estão temporariamente
+            desativados.
           </Alert>
         </div>
       )}
@@ -251,7 +252,7 @@ function BillingInner() {
                 <UsageMeter
                   used={usage.dispatchCount}
                   included={usage.includedDispatches}
-                  overage={usage.purchasedOverage}
+                  creditBalance={status?.creditBalance ?? 0}
                 />
               )}
 
@@ -262,7 +263,7 @@ function BillingInner() {
                     disabled={acting}
                     onClick={() => handleBuyOverage(1)}
                   >
-                    Comprar pacote de excedente (
+                    Adicionar créditos (
                     {overagePlan.overagePackageSize.toLocaleString("pt-BR")} por{" "}
                     {formatCents(overagePlan.overagePackagePriceCents)})
                   </Button>
@@ -288,13 +289,23 @@ function BillingInner() {
                 <UsageMeter
                   used={usage.dispatchCount}
                   included={usage.includedDispatches}
-                  overage={usage.purchasedOverage}
+                  creditBalance={status?.creditBalance ?? 0}
                 />
               )}
             </div>
           )}
         </CardBody>
       </Card>
+
+      {/* Saved card + auto-recharge */}
+      {status && sub && (
+        <Card className="mb-8">
+          <CardHeader title="Créditos & auto-recarga" />
+          <CardBody>
+            <CardManager status={status} onChanged={refresh} />
+          </CardBody>
+        </Card>
+      )}
 
       {/* Plans */}
       <h2 className="text-base font-semibold text-zinc-900 mb-4">

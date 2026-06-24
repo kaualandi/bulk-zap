@@ -79,6 +79,8 @@ export const dispatchUsage = pgTable(
   })
 );
 
+// Ledger imutável de compras de excedente (manual ou auto-recarga). Cada compra
+// aprovada CREDITA o saldo em `credit_accounts.balance`. status: pending|approved.
 export const overagePurchases = pgTable(
   "overage_purchases",
   {
@@ -88,8 +90,11 @@ export const overagePurchases = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     dispatches: integer("dispatches").notNull(),
     amountCents: integer("amount_cents").notNull(),
-    // Mercado Pago payment id for the one-off package purchase.
-    mpPaymentId: text("mp_payment_id"),
+    // Mercado Pago payment id for the one-off package purchase. Unique: âncora de
+    // idempotência pra creditar o saldo exatamente uma vez por pagamento.
+    mpPaymentId: text("mp_payment_id").unique(),
+    // "manual" (Checkout Pro) | "auto_recharge" (cartão salvo).
+    source: text("source").notNull().default("manual"),
     status: text("status").notNull().default("pending"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -100,6 +105,39 @@ export const overagePurchases = pgTable(
   })
 );
 
+// Conta de créditos por org. `balance` é o saldo de disparos excedentes
+// disponíveis e NÃO expira (substitui o pacote por período). Carrega também a
+// config de auto-recarga e a referência do cartão salvo no Mercado Pago.
+export const creditAccounts = pgTable("credit_accounts", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  balance: integer("balance").notNull().default(0),
+
+  // Auto-recarga (opt-in): quando balance < threshold, cobra o cartão salvo e
+  // credita `packageQty` pacotes.
+  autoRechargeEnabled: boolean("auto_recharge_enabled").notNull().default(false),
+  autoRechargeThreshold: integer("auto_recharge_threshold"),
+  autoRechargePackageQty: integer("auto_recharge_package_qty")
+    .notNull()
+    .default(1),
+  // Evita enfileirar duas recargas concorrentes (setado ao agendar, limpo no job).
+  rechargePending: boolean("recharge_pending").notNull().default(false),
+
+  // Cartão salvo (Mercado Pago Customers/Cards) para card-on-file.
+  mpCustomerId: text("mp_customer_id"),
+  mpCardId: text("mp_card_id"),
+  cardLast4: text("card_last4"),
+  cardBrand: text("card_brand"),
+
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type Plan = typeof plans.$inferSelect;
 export type NewPlan = typeof plans.$inferInsert;
 export type Subscription = typeof subscriptions.$inferSelect;
@@ -108,3 +146,5 @@ export type DispatchUsage = typeof dispatchUsage.$inferSelect;
 export type NewDispatchUsage = typeof dispatchUsage.$inferInsert;
 export type OveragePurchase = typeof overagePurchases.$inferSelect;
 export type NewOveragePurchase = typeof overagePurchases.$inferInsert;
+export type CreditAccount = typeof creditAccounts.$inferSelect;
+export type NewCreditAccount = typeof creditAccounts.$inferInsert;

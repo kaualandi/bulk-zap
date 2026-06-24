@@ -161,26 +161,34 @@ Modelos:
 - `MODEL_HAIKU = "claude-haiku-4-5"` — classificação rápida, barata (~$0.0005/req).
 - `MODEL_SONNET = "claude-sonnet-4-6"` — geração criativa (~$0.003-0.005/req).
 
-### 9. Billing PRÉ-PAGO (mensalidade + franquia + excedente comprado antes)
+### 9. Billing PRÉ-PAGO (mensalidade + franquia + créditos de excedente)
 
 Em `apps/api/src/services/billing.service.ts`. Mensalidade (assinatura recorrente
-via preapproval do MP) inclui uma franquia (`includedDispatches`). Para passar da
-franquia, o cliente **compra um pacote de excedente ANTES** (Checkout Pro one-off,
-`/billing/overage` → `createOveragePayment`), registrado em `overage_purchases`.
+via preapproval do MP) inclui uma franquia mensal (`includedDispatches`). Para
+passar da franquia, a org consome de um **saldo de créditos que NÃO expira**
+(`credit_accounts.balance`), comprado antes (Checkout Pro manual, `/billing/overage`)
+ou recarregado automático (cartão salvo). Cada compra aprovada credita o saldo via
+`creditApprovedPurchase` (idempotente pelo `mpPaymentId` único de `overage_purchases`).
 
-- **Janela de quota = mês calendário** (`resolvePeriod()`, sem parâmetro) — o
-  `dispatch_usage` é chaveado por `org+periodStart` e precisa rolar de forma
-  previsível (reset no dia 1º). NÃO derive o período do ciclo do MP: o
-  `date_created` do preapproval é estático e o periodStart nunca avançaria.
-- **Gate (`canDispatch`) é pré-pago**: bloqueia quando `dispatchCount >=
-  includedDispatches + purchasedOverage` (`quota_exceeded`), além de sem
-  assinatura / assinatura ≠ `authorized`. Pacotes são contados no período
-  corrente (`purchasedOverageForPeriod`).
-- **NÃO reintroduza pós-pago por mensagem** (faturar o excedente no fechamento).
-  Foi tentado e revertido por decisão de conselho: pós-pago manual no Brasil tem
-  inadimplência estrutural + permite acúmulo ilimitado/fraude antes da cobrança;
-  pré-pago (cliente paga antes de disparar o excedente) é o modelo escolhido até
-  haver volume de clientes que justifique cartão salvo / auto-recarga.
+- **Franquia = mês calendário** (`resolvePeriod()`, sem parâmetro): `dispatch_usage`
+  (chaveado por `org+periodStart`) reseta no dia 1º. NÃO derive o período do ciclo
+  do MP (o `date_created` do preapproval é estático e o periodStart nunca avançaria).
+  O **saldo de créditos é independente do período** — não reseta.
+- **Gate (`canDispatch`)**: permitido se `dispatchCount < includedDispatches` (dentro
+  da franquia) OU `creditBalance > 0`; senão `quota_exceeded`. `recordDispatch` debita
+  o saldo na porção de excedente (GREATEST(...,0)).
+- **Auto-recarga (opt-in, cartão salvo / card-on-file)**: cartão salvo via MP
+  Customers/Cards (`saveCardForOrg`, token tokenizado no front com
+  `NEXT_PUBLIC_MP_PUBLIC_KEY`). `maybeTriggerAutoRecharge` (chamado no `recordDispatch`)
+  enfileira `auto-recharge.job.ts` quando `balance < threshold` — o UPDATE atômico em
+  `rechargePending` + jobId dedup evitam recarga dupla. O job cobra o cartão
+  (`chargeSavedCard`: gera card_token do cartão salvo + Payment) e credita. CAVEAT:
+  card-on-file sem CVV pode ser recusado por alguns emissores — falha graciosa (saldo
+  fica baixo, cliente compra manual).
+- **NÃO reintroduza pós-pago por mensagem** (faturar excedente no fechamento). Foi
+  tentado e revertido por decisão de conselho: pós-pago manual no Brasil tem
+  inadimplência estrutural + permite acúmulo ilimitado/fraude antes da cobrança.
+- `overage_purchases` é o ledger imutável das compras (manual + auto_recharge).
 
 ## Features de IA (todas opcionais via env)
 

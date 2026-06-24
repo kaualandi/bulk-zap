@@ -6,8 +6,12 @@ import { logger } from "../logger.js";
 import { authPlugin } from "../lib/auth-middleware.js";
 import {
   canDispatch,
+  clearSavedCard,
   getBillingStatus,
   getLatestSubscription,
+  getOrCreateCreditAccount,
+  setAutoRecharge,
+  setSavedCard,
   syncFromWebhook,
   type MpWebhookPayload,
 } from "../services/billing.service.js";
@@ -18,6 +22,8 @@ import {
   getPayment,
   getPreapproval,
   isMercadoPagoConfigured,
+  removeSavedCard,
+  saveCardForOrg,
   verifyWebhookSignature,
 } from "../services/mercadopago.service.js";
 
@@ -178,6 +184,78 @@ export const billingRoutes = new Elysia({ prefix: "/billing" })
       return { initPoint, preferenceId, dispatches, amountCents };
     },
     { auth: true, body: t.Object({ packageQty: t.Integer({ minimum: 1, maximum: 100 }) }) }
+  )
+
+  // Save a card (token from frontend MP tokenization) for card-on-file recharge.
+  .post(
+    "/card",
+    async ({ organizationId, user, body }) => {
+      if (!isMercadoPagoConfigured()) throw new MercadoPagoUnavailableError();
+      const account = await getOrCreateCreditAccount(organizationId);
+      const saved = await saveCardForOrg({
+        email: user.email,
+        cardToken: body.token,
+        existingCustomerId: account.mpCustomerId,
+      });
+      await setSavedCard(organizationId, {
+        mpCustomerId: saved.customerId,
+        mpCardId: saved.cardId,
+        cardLast4: saved.last4,
+        cardBrand: saved.brand,
+      });
+      return { last4: saved.last4, brand: saved.brand };
+    },
+    { auth: true, body: t.Object({ token: t.String({ minLength: 1 }) }) }
+  )
+
+  // Forget the saved card (also disables auto-recharge).
+  .delete(
+    "/card",
+    async ({ organizationId }) => {
+      const account = await getOrCreateCreditAccount(organizationId);
+      if (account.mpCustomerId && account.mpCardId && isMercadoPagoConfigured()) {
+        try {
+          await removeSavedCard(account.mpCustomerId, account.mpCardId);
+        } catch (err) {
+          logger.warn({ err, organizationId }, "failed to remove MP card");
+        }
+      }
+      await clearSavedCard(organizationId);
+      return { ok: true };
+    },
+    { auth: true }
+  )
+
+  // Configure auto-recharge (requires a saved card to enable).
+  .put(
+    "/auto-recharge",
+    async ({ organizationId, body, set }) => {
+      if (body.enabled) {
+        const account = await getOrCreateCreditAccount(organizationId);
+        if (!account.mpCardId) {
+          set.status = 400;
+          return { error: "no_card" };
+        }
+        if (body.threshold == null) {
+          set.status = 400;
+          return { error: "threshold_required" };
+        }
+      }
+      await setAutoRecharge(organizationId, {
+        enabled: body.enabled,
+        threshold: body.threshold ?? null,
+        packageQty: body.packageQty,
+      });
+      return { ok: true };
+    },
+    {
+      auth: true,
+      body: t.Object({
+        enabled: t.Boolean(),
+        threshold: t.Optional(t.Nullable(t.Integer({ minimum: 0 }))),
+        packageQty: t.Integer({ minimum: 1, maximum: 100 }),
+      }),
+    }
   )
 
   // Mercado Pago webhook. PUBLIC: validates HMAC signature, then syncs.

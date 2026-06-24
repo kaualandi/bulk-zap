@@ -8,6 +8,7 @@ import { trimTrailingSlash } from "hono/trailing-slash";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import {
+  autoRechargeQueue,
   classifyInboundQueue,
   sendMessageQueue,
   warmupCheckQueue,
@@ -33,6 +34,7 @@ export function createBullBoardApp(): BullBoardApp {
       new BullMQAdapter(sendMessageQueue),
       new BullMQAdapter(warmupCheckQueue),
       new BullMQAdapter(classifyInboundQueue),
+      new BullMQAdapter(autoRechargeQueue),
     ],
     serverAdapter,
     options: {

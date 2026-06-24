@@ -150,9 +150,15 @@ export type BillingStatus = {
     periodEnd: string;
     dispatchCount: number;
     includedDispatches: number;
-    purchasedOverage: number;
-    quota: number;
-    remaining: number;
+  };
+  // Saldo de créditos de excedente disponíveis (não expira).
+  creditBalance: number;
+  // Cartão salvo (card-on-file), se houver.
+  card: { last4: string; brand: string } | null;
+  autoRecharge: {
+    enabled: boolean;
+    threshold: number | null;
+    packageQty: number;
   };
   canDispatch: {
     allowed: boolean;
@@ -169,6 +175,8 @@ export type OverageResult = {
   dispatches: number;
   amountCents: number;
 };
+
+export type SavedCard = { last4: string; brand: string };
 
 /**
  * Thrown when the billing backend reports Mercado Pago is not configured (503).
@@ -210,4 +218,18 @@ export const billing = {
       throw err;
     }
   },
+  saveCard: async (token: string): Promise<SavedCard> => {
+    try {
+      return await api.post<SavedCard>("/billing/card", { token });
+    } catch (err) {
+      if (isUnavailable(err)) throw new MercadoPagoUnavailableError();
+      throw err;
+    }
+  },
+  removeCard: () => api.delete<{ ok: true }>("/billing/card"),
+  setAutoRecharge: (cfg: {
+    enabled: boolean;
+    threshold: number | null;
+    packageQty: number;
+  }) => api.put<{ ok: true } | { error: string }>("/billing/auto-recharge", cfg),
 };
