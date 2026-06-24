@@ -1,33 +1,27 @@
 import { cn } from "@/lib/cn";
 
-const brl = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-});
-
 /**
- * Dispatch-usage meter (post-paid model). The bar shows how much of the monthly
- * included allowance has been used. Going over the allowance does NOT cap usage:
- * the excess accrues as per-message overage (shown below) and is invoiced at the
- * end of the period.
+ * Visual dispatch-usage meter. Shows how much of the period quota
+ * (included dispatches + purchased overage) has been consumed.
  */
 export function UsageMeter({
   used,
   included,
-  overageDispatches,
-  overageAmountCents,
+  overage,
 }: {
   used: number;
   included: number;
-  overageDispatches: number;
-  overageAmountCents: number;
+  overage: number;
 }) {
-  const includedUsed = Math.min(used, included);
-  const remaining = Math.max(included - used, 0);
-  const pct = included > 0 ? Math.min((includedUsed / included) * 100, 100) : 100;
-  const overActive = overageDispatches > 0;
+  const quota = included + overage;
+  const remaining = Math.max(quota - used, 0);
+  const pct = quota > 0 ? Math.min((used / quota) * 100, 100) : 0;
+  const includedPct =
+    quota > 0 ? Math.min((included / quota) * 100, 100) : 100;
 
-  const tone = overActive ? "danger" : pct >= 85 ? "warning" : "ok";
+  const tone =
+    pct >= 100 ? "danger" : pct >= 85 ? "warning" : "ok";
+
   const barColor =
     tone === "danger"
       ? "bg-red-500"
@@ -40,23 +34,21 @@ export function UsageMeter({
       <div className="flex items-baseline justify-between mb-2">
         <span className="text-sm text-zinc-600">
           <span className="font-semibold text-zinc-900">
-            {includedUsed.toLocaleString("pt-BR")}
+            {used.toLocaleString("pt-BR")}
           </span>{" "}
-          de {included.toLocaleString("pt-BR")} inclusos usados
+          de {quota.toLocaleString("pt-BR")} disparos usados
         </span>
         <span
           className={cn(
             "text-xs font-medium",
-            overActive
+            tone === "danger"
               ? "text-red-600"
               : tone === "warning"
                 ? "text-yellow-700"
                 : "text-zinc-500"
           )}
         >
-          {overActive
-            ? "franquia esgotada"
-            : `${remaining.toLocaleString("pt-BR")} restantes`}
+          {remaining.toLocaleString("pt-BR")} restantes
         </span>
       </div>
 
@@ -68,15 +60,22 @@ export function UsageMeter({
           )}
           style={{ width: `${pct}%` }}
         />
+        {/* Marker where the included allowance ends (overage begins). */}
+        {overage > 0 && includedPct < 100 && (
+          <div
+            className="absolute inset-y-0 w-px bg-zinc-400"
+            style={{ left: `${includedPct}%` }}
+            title="Fim do plano incluído"
+          />
+        )}
       </div>
 
-      <div className="flex items-center justify-between gap-4 mt-2 text-xs text-zinc-500">
-        <span>Incluído no plano: {included.toLocaleString("pt-BR")}/mês</span>
-        {overActive && (
-          <span className="font-medium text-red-600">
-            +{overageDispatches.toLocaleString("pt-BR")} excedente ·{" "}
-            {brl.format(overageAmountCents / 100)} (cobrado no fechamento)
-          </span>
+      <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500">
+        <span>
+          Incluído no plano: {included.toLocaleString("pt-BR")}
+        </span>
+        {overage > 0 && (
+          <span>Excedente comprado: {overage.toLocaleString("pt-BR")}</span>
         )}
       </div>
     </div>

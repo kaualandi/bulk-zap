@@ -161,25 +161,26 @@ Modelos:
 - `MODEL_HAIKU = "claude-haiku-4-5"` — classificação rápida, barata (~$0.0005/req).
 - `MODEL_SONNET = "claude-sonnet-4-6"` — geração criativa (~$0.003-0.005/req).
 
-### 9. Billing pós-pago (mensalidade + excedente por mensagem)
+### 9. Billing PRÉ-PAGO (mensalidade + franquia + excedente comprado antes)
 
-Em `apps/api/src/services/billing.service.ts`. Cada plano tem mensalidade
-(`monthlyPriceCents`, assinatura recorrente via preapproval do MP) + franquia
-(`includedDispatches`). Acima da franquia, **cada mensagem é cobrada** (preço por
-mensagem = `overagePackagePriceCents / overagePackageSize`, sem coluna nova).
+Em `apps/api/src/services/billing.service.ts`. Mensalidade (assinatura recorrente
+via preapproval do MP) inclui uma franquia (`includedDispatches`). Para passar da
+franquia, o cliente **compra um pacote de excedente ANTES** (Checkout Pro one-off,
+`/billing/overage` → `createOveragePayment`), registrado em `overage_purchases`.
 
-- **Janela de quota = mês calendário** (`resolvePeriod()`), não o ciclo do MP — o
-  `dispatch_usage` (chaveado por `org+periodStart`) precisa avançar de forma
-  previsível. `recordDispatch` acumula `dispatchCount` e `overageDispatches`.
-- **Gate (`canDispatch`) é pós-pago**: NÃO bloqueia ao estourar a franquia (o
-  excedente acumula). Só bloqueia por: sem assinatura, assinatura ≠ `authorized`,
-  ou **fatura de excedente não paga** de um período fechado (`overage_invoice_unpaid`)
-  — esse é o controle de crédito.
-- **Fechamento**: o cron `close-billing-period.job.ts` (diário, 04:00) fatura o
-  excedente de períodos já fechados → cria `overage_invoices` (1 por `org+periodStart`)
-  + um Checkout Pro (`createOverageInvoicePayment`, `external_reference =
-  overage_invoice:<id>`). O webhook marca a fatura como `paid`.
-- Tabela `overage_purchases` é **legacy** (pré-pago, descontinuado) — não usar.
+- **Janela de quota = mês calendário** (`resolvePeriod()`, sem parâmetro) — o
+  `dispatch_usage` é chaveado por `org+periodStart` e precisa rolar de forma
+  previsível (reset no dia 1º). NÃO derive o período do ciclo do MP: o
+  `date_created` do preapproval é estático e o periodStart nunca avançaria.
+- **Gate (`canDispatch`) é pré-pago**: bloqueia quando `dispatchCount >=
+  includedDispatches + purchasedOverage` (`quota_exceeded`), além de sem
+  assinatura / assinatura ≠ `authorized`. Pacotes são contados no período
+  corrente (`purchasedOverageForPeriod`).
+- **NÃO reintroduza pós-pago por mensagem** (faturar o excedente no fechamento).
+  Foi tentado e revertido por decisão de conselho: pós-pago manual no Brasil tem
+  inadimplência estrutural + permite acúmulo ilimitado/fraude antes da cobrança;
+  pré-pago (cliente paga antes de disparar o excedente) é o modelo escolhido até
+  haver volume de clientes que justifique cartão salvo / auto-recarga.
 
 ## Features de IA (todas opcionais via env)
 

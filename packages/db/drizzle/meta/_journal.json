@@ -29,13 +29,6 @@
       "when": 1780148838547,
       "tag": "0003_nifty_smiling_tiger",
       "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1782331986181,
-      "tag": "0004_sloppy_frog_thor",
-      "breakpoints": true
     }
   ]
 }

@@ -1,17 +1,12 @@
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   dispatchUsage,
   organizations,
-  overageInvoices,
+  overagePurchases,
   plans,
   subscriptions,
 } from "@bulk-zap/db";
-import type {
-  DispatchUsage,
-  OverageInvoice,
-  Plan,
-  Subscription,
-} from "@bulk-zap/db";
+import type { DispatchUsage, Plan, Subscription } from "@bulk-zap/db";
 import { db } from "../db.js";
 import { logger } from "../logger.js";
 
@@ -78,48 +73,27 @@ function resolvePeriod(): Period {
   };
 }
 
-// ---- Per-message overage pricing -------------------------------------------
-
 /**
- * Price of a single overage message, in (fractional) centavos. Derived from the
- * plan's overage package economics — there's a single source of truth and no
- * extra column: e.g. R$25 / 1.000 disparos => 2.5 centavos por mensagem.
+ * Sum overage dispatches purchased (status approved/paid) for an org within the period.
  */
-export function perMessageCents(plan: Plan): number {
-  if (plan.overagePackageSize <= 0) return 0;
-  return plan.overagePackagePriceCents / plan.overagePackageSize;
-}
-
-/**
- * Total charge (centavos, rounded) for `count` overage messages on a plan.
- * Computed in one shot to avoid per-message rounding drift.
- */
-export function overageChargeCents(plan: Plan, count: number): number {
-  if (count <= 0 || plan.overagePackageSize <= 0) return 0;
-  return Math.round(
-    (count * plan.overagePackagePriceCents) / plan.overagePackageSize
-  );
-}
-
-/**
- * The org's latest unpaid (pending) overage invoice from a CLOSED period, or
- * null. Used both for the billing gate (credit control) and the UI.
- */
-export async function getOpenInvoice(
-  orgId: string
-): Promise<OverageInvoice | null> {
+async function purchasedOverageForPeriod(
+  orgId: string,
+  period: Period
+): Promise<number> {
   const [row] = await db
-    .select()
-    .from(overageInvoices)
+    .select({
+      total: sql<number>`coalesce(sum(${overagePurchases.dispatches}), 0)::int`,
+    })
+    .from(overagePurchases)
     .where(
       and(
-        eq(overageInvoices.organizationId, orgId),
-        eq(overageInvoices.status, "pending")
+        eq(overagePurchases.organizationId, orgId),
+        eq(overagePurchases.status, "approved"),
+        sql`${overagePurchases.createdAt} >= ${period.periodStart}`,
+        sql`${overagePurchases.createdAt} < ${period.periodEnd}`
       )
-    )
-    .orderBy(desc(overageInvoices.periodStart))
-    .limit(1);
-  return row ?? null;
+    );
+  return row?.total ?? 0;
 }
 
 /**
@@ -175,13 +149,9 @@ export async function getOrCreateCurrentUsage(
 export type CanDispatchResult = { allowed: boolean; reason?: string };
 
 /**
- * Billing gate (SEPARATE from anti-ban warnings). Post-paid model: an org may
- * dispatch when it has an `authorized` subscription. Going over the included
- * quota does NOT block — the excess accrues as per-message overage and is
- * invoiced at period close. The ONLY billing block (besides a missing/inactive
- * subscription) is an UNPAID overage invoice from a previous, closed period:
- * the org must settle last cycle's usage before continuing. This is the credit
- * control for the post-paid model.
+ * Billing gate (SEPARATE from anti-ban warnings). An org may dispatch only if:
+ *  - it has a subscription with status = 'authorized', AND
+ *  - current-period dispatchCount < plan.includedDispatches + purchased overage.
  */
 export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
   const active = await getActiveSubscription(orgId);
@@ -195,9 +165,13 @@ export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
     };
   }
 
-  const openInvoice = await getOpenInvoice(orgId);
-  if (openInvoice) {
-    return { allowed: false, reason: "overage_invoice_unpaid" };
+  const period = resolvePeriod();
+  const usage = await getOrCreateCurrentUsage(orgId);
+  const purchasedOverage = await purchasedOverageForPeriod(orgId, period);
+  const quota = active.plan.includedDispatches + purchasedOverage;
+
+  if (usage.dispatchCount >= quota) {
+    return { allowed: false, reason: "quota_exceeded" };
   }
   return { allowed: true };
 }
@@ -243,26 +217,10 @@ export type BillingStatus = {
     periodEnd: Date;
     dispatchCount: number;
     includedDispatches: number;
-    /** Mensagens já enviadas além da franquia neste período. */
-    overageDispatches: number;
-    /** Custo acumulado do excedente deste período, em centavos (será faturado). */
-    overageAmountCents: number;
-    /** Preço por mensagem excedente, em centavos (pode ser fracionário). */
-    perMessageCents: number;
+    purchasedOverage: number;
+    quota: number;
+    remaining: number;
   };
-  /** Fatura de excedente em aberto (não paga) de um período fechado, se houver. */
-  openInvoice:
-    | (Pick<
-        OverageInvoice,
-        | "id"
-        | "periodStart"
-        | "periodEnd"
-        | "dispatches"
-        | "amountCents"
-        | "status"
-        | "mpInitPoint"
-      >)
-    | null;
   canDispatch: CanDispatchResult;
 };
 
@@ -271,13 +229,11 @@ export type BillingStatus = {
  */
 export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
   const active = await getActiveSubscription(orgId);
+  const period = resolvePeriod();
   const usage = await getOrCreateCurrentUsage(orgId);
-  const plan = active?.plan ?? null;
-  const included = plan?.includedDispatches ?? 0;
-  const overageAmountCents = plan
-    ? overageChargeCents(plan, usage.overageDispatches)
-    : 0;
-  const openInvoice = await getOpenInvoice(orgId);
+  const purchasedOverage = await purchasedOverageForPeriod(orgId, period);
+  const included = active?.plan.includedDispatches ?? 0;
+  const quota = included + purchasedOverage;
   const gate = await canDispatch(orgId);
 
   return {
@@ -296,21 +252,10 @@ export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
       periodEnd: usage.periodEnd,
       dispatchCount: usage.dispatchCount,
       includedDispatches: included,
-      overageDispatches: usage.overageDispatches,
-      overageAmountCents,
-      perMessageCents: plan ? perMessageCents(plan) : 0,
+      purchasedOverage,
+      quota,
+      remaining: Math.max(0, quota - usage.dispatchCount),
     },
-    openInvoice: openInvoice
-      ? {
-          id: openInvoice.id,
-          periodStart: openInvoice.periodStart,
-          periodEnd: openInvoice.periodEnd,
-          dispatches: openInvoice.dispatches,
-          amountCents: openInvoice.amountCents,
-          status: openInvoice.status,
-          mpInitPoint: openInvoice.mpInitPoint,
-        }
-      : null,
     canDispatch: gate,
   };
 }
@@ -418,172 +363,48 @@ async function syncPayment(
   const status = (resource?.status as string | undefined) ?? "";
   const externalReference = resource?.external_reference as string | undefined;
 
-  // Post-paid overage invoices are encoded as "overage_invoice:<invoiceId>".
-  if (!externalReference?.startsWith("overage_invoice:")) {
-    logger.debug(
-      { paymentId, externalReference },
-      "MP payment webhook: not an overage invoice"
-    );
+  // Only overage one-off payments are encoded as "overage:<orgId>:<dispatches>".
+  if (!externalReference?.startsWith("overage:")) {
+    logger.debug({ paymentId, externalReference }, "MP payment webhook: not an overage purchase");
     return;
   }
-  const invoiceId = externalReference.split(":")[1];
-  if (!invoiceId) {
-    logger.warn({ externalReference }, "MP payment webhook: malformed invoice reference");
+  const parts = externalReference.split(":");
+  const orgId = parts[1];
+  const dispatches = Number(parts[2] ?? "0");
+  if (!orgId || !dispatches) {
+    logger.warn({ externalReference }, "MP payment webhook: malformed overage reference");
     return;
   }
 
+  const mappedStatus = status === "approved" ? "approved" : status || "pending";
+  const transactionAmount = resource?.transaction_amount as number | undefined;
+  const amountCents = transactionAmount ? Math.round(transactionAmount * 100) : 0;
   const mpPaymentId = String(paymentId);
-  const [invoice] = await db
-    .select()
-    .from(overageInvoices)
-    .where(eq(overageInvoices.id, invoiceId))
-    .limit(1);
-  if (!invoice) {
-    logger.warn({ invoiceId, mpPaymentId }, "MP payment webhook: invoice not found");
-    return;
-  }
 
-  // Idempotent: an approved invoice stays paid; record the payment id once.
-  if (invoice.status === "paid") return;
-
-  const nextStatus = status === "approved" ? "paid" : "pending";
-  await db
-    .update(overageInvoices)
-    .set({ status: nextStatus, mpPaymentId, updatedAt: new Date() })
-    .where(eq(overageInvoices.id, invoice.id));
-}
-
-// ---- Period close / invoicing ----------------------------------------------
-
-/**
- * Find closed-period usage rows that have overage but no invoice yet. Used by
- * the cron to invoice the just-closed cycle. Returns the org + period + count.
- */
-export async function listClosedPeriodsNeedingInvoice(now: Date): Promise<
-  { organizationId: string; periodStart: Date; periodEnd: Date; overageDispatches: number }[]
-> {
-  const rows = await db
-    .select({
-      organizationId: dispatchUsage.organizationId,
-      periodStart: dispatchUsage.periodStart,
-      periodEnd: dispatchUsage.periodEnd,
-      overageDispatches: dispatchUsage.overageDispatches,
-      invoiceId: overageInvoices.id,
-    })
-    .from(dispatchUsage)
-    .leftJoin(
-      overageInvoices,
-      and(
-        eq(overageInvoices.organizationId, dispatchUsage.organizationId),
-        eq(overageInvoices.periodStart, dispatchUsage.periodStart)
-      )
-    )
-    .where(
-      and(
-        lt(dispatchUsage.periodEnd, now),
-        sql`${dispatchUsage.overageDispatches} > 0`,
-        sql`${overageInvoices.id} IS NULL`
-      )
-    );
-  return rows.map((r) => ({
-    organizationId: r.organizationId,
-    periodStart: r.periodStart,
-    periodEnd: r.periodEnd,
-    overageDispatches: r.overageDispatches,
-  }));
-}
-
-/**
- * Create (idempotently) the overage invoice row for a closed period. The MP
- * Checkout preference is created by the caller (cron / pay route) and attached
- * via {@link attachInvoiceCheckout}. Returns the invoice, or null if there is
- * no plan to price the overage. Safe against the unique (org, periodStart).
- */
-export async function createOverageInvoiceForPeriod(input: {
-  organizationId: string;
-  periodStart: Date;
-  periodEnd: Date;
-  overageDispatches: number;
-}): Promise<OverageInvoice | null> {
-  const active = await getActiveSubscription(input.organizationId);
-  const plan = active?.plan ?? null;
-  if (!plan) return null;
-  const amountCents = overageChargeCents(plan, input.overageDispatches);
-  if (amountCents <= 0) return null;
-
-  const [created] = await db
-    .insert(overageInvoices)
-    .values({
-      organizationId: input.organizationId,
-      periodStart: input.periodStart,
-      periodEnd: input.periodEnd,
-      dispatches: input.overageDispatches,
-      amountCents,
-      status: "pending",
-    })
-    .onConflictDoNothing({
-      target: [overageInvoices.organizationId, overageInvoices.periodStart],
-    })
-    .returning();
-  if (created) return created;
-
-  // Lost the race / already existed: re-read.
+  // Idempotent on mpPaymentId.
   const [existing] = await db
     .select()
-    .from(overageInvoices)
-    .where(
-      and(
-        eq(overageInvoices.organizationId, input.organizationId),
-        eq(overageInvoices.periodStart, input.periodStart)
-      )
-    )
+    .from(overagePurchases)
+    .where(eq(overagePurchases.mpPaymentId, mpPaymentId))
     .limit(1);
-  return existing ?? null;
-}
 
-/**
- * Persist the MP Checkout preference id + init_point on an invoice.
- */
-export async function attachInvoiceCheckout(
-  invoiceId: string,
-  mpPreferenceId: string,
-  mpInitPoint: string
-): Promise<void> {
-  await db
-    .update(overageInvoices)
-    .set({ mpPreferenceId, mpInitPoint, updatedAt: new Date() })
-    .where(eq(overageInvoices.id, invoiceId));
-}
+  if (existing) {
+    if (existing.status !== mappedStatus) {
+      await db
+        .update(overagePurchases)
+        .set({ status: mappedStatus })
+        .where(eq(overagePurchases.id, existing.id));
+    }
+    return;
+  }
 
-/**
- * Load an org-owned invoice by id (or null). Used by the pay route.
- */
-export async function getOwnedInvoice(
-  invoiceId: string,
-  organizationId: string
-): Promise<OverageInvoice | null> {
-  const [row] = await db
-    .select()
-    .from(overageInvoices)
-    .where(
-      and(
-        eq(overageInvoices.id, invoiceId),
-        eq(overageInvoices.organizationId, organizationId)
-      )
-    )
-    .limit(1);
-  return row ?? null;
-}
-
-/**
- * List the org's overage invoices, most recent first.
- */
-export async function listInvoices(orgId: string): Promise<OverageInvoice[]> {
-  return await db
-    .select()
-    .from(overageInvoices)
-    .where(eq(overageInvoices.organizationId, orgId))
-    .orderBy(desc(overageInvoices.periodStart));
+  await db.insert(overagePurchases).values({
+    organizationId: orgId,
+    dispatches,
+    amountCents,
+    mpPaymentId,
+    status: mappedStatus,
+  });
 }
 
 /**

@@ -5,7 +5,6 @@ export const QUEUE_NAMES = {
   sendMessage: "send-message",
   warmupCheck: "warmup-check",
   classifyInbound: "classify-inbound",
-  closeBillingPeriod: "close-billing-period",
 } as const;
 
 export type SendMessageJobData = {
@@ -14,8 +13,6 @@ export type SendMessageJobData = {
 };
 
 export type WarmupCheckJobData = Record<string, never>;
-
-export type CloseBillingPeriodJobData = Record<string, never>;
 
 export type ClassifyInboundJobData = {
   inboundMessageId: string;
@@ -33,11 +30,6 @@ export const warmupCheckQueue = new Queue<WarmupCheckJobData>(
 
 export const classifyInboundQueue = new Queue<ClassifyInboundJobData>(
   QUEUE_NAMES.classifyInbound,
-  { connection: createBullConnection() }
-);
-
-export const closeBillingPeriodQueue = new Queue<CloseBillingPeriodJobData>(
-  QUEUE_NAMES.closeBillingPeriod,
   { connection: createBullConnection() }
 );
 
@@ -66,15 +58,5 @@ export function createClassifyInboundWorker(
     QUEUE_NAMES.classifyInbound,
     processor,
     { connection: createBullConnection(), concurrency: 4 }
-  );
-}
-
-export function createCloseBillingPeriodWorker(
-  processor: (job: Job<CloseBillingPeriodJobData>) => Promise<void>
-): Worker<CloseBillingPeriodJobData> {
-  return new Worker<CloseBillingPeriodJobData>(
-    QUEUE_NAMES.closeBillingPeriod,
-    processor,
-    { connection: createBullConnection(), concurrency: 1 }
   );
 }
