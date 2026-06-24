@@ -3,13 +3,30 @@ import {
   creditApprovedPurchase,
   getOrCreateCreditAccount,
   getOrgPlan,
+  recordRechargeFailure,
   releaseRechargeLock,
 } from "../services/billing.service.js";
 import {
   chargeSavedCard,
   isMercadoPagoConfigured,
 } from "../services/mercadopago.service.js";
+import { sendAlert } from "../services/email-alert.service.js";
 import { createAutoRechargeWorker } from "./queue.js";
+
+/**
+ * Auto-recharge NÃO pode falhar em silêncio: persiste o erro (surface na UI via
+ * billing status) e dispara um e-mail best-effort pros inscritos da org.
+ */
+async function notifyRechargeFailure(orgId: string, message: string) {
+  await recordRechargeFailure(orgId, message);
+  await sendAlert({
+    accountId: null,
+    organizationId: orgId,
+    eventType: "auto_recharge_failed",
+    subject: "BulkZap — falha na auto-recarga de créditos",
+    text: `A auto-recarga automática falhou: ${message}. Seus disparos podem ser bloqueados quando o saldo acabar. Atualize o cartão ou compre créditos manualmente em Plano & Cobrança.`,
+  });
+}
 
 /**
  * On-demand worker: tops up an org's credit balance by charging its saved card.
@@ -76,9 +93,17 @@ export function startAutoRechargeWorker() {
           { orgId, status: payment.status, paymentId: payment.id },
           "auto-recharge payment not approved"
         );
+        await notifyRechargeFailure(
+          orgId,
+          `pagamento ${payment.status} (cartão recusado)`
+        );
       }
     } catch (err) {
       logger.error({ err, orgId }, "auto-recharge failed");
+      await notifyRechargeFailure(
+        orgId,
+        err instanceof Error ? err.message : "erro ao cobrar o cartão"
+      ).catch((e) => logger.error({ e, orgId }, "failed to notify recharge failure"));
     } finally {
       await releaseRechargeLock(orgId);
     }

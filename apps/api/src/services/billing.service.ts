@@ -131,6 +131,29 @@ export async function addCredits(
     .update(creditAccounts)
     .set({
       balance: sql`${creditAccounts.balance} + ${dispatches}`,
+      // Saldo recarregado (auto ou manual) limpa qualquer falha pendente.
+      lastRechargeError: null,
+      lastRechargeErrorAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(creditAccounts.organizationId, orgId));
+}
+
+/**
+ * Record an auto-recharge failure (card declined / error) on the account and
+ * release the lock. Surfaced in the billing status/UI so the recharge does NOT
+ * fail silently — the org sees it must fix the card or buy credits manually.
+ */
+export async function recordRechargeFailure(
+  orgId: string,
+  message: string
+): Promise<void> {
+  await db
+    .update(creditAccounts)
+    .set({
+      lastRechargeError: message,
+      lastRechargeErrorAt: new Date(),
+      rechargePending: false,
       updatedAt: new Date(),
     })
     .where(eq(creditAccounts.organizationId, orgId));
@@ -388,6 +411,8 @@ export type BillingStatus = {
     threshold: number | null;
     packageQty: number;
   };
+  /** Última falha de auto-recarga (cartão recusado/erro), se pendente. */
+  rechargeError: { message: string; at: Date } | null;
   canDispatch: CanDispatchResult;
 };
 
@@ -428,6 +453,10 @@ export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
       threshold: account.autoRechargeThreshold,
       packageQty: account.autoRechargePackageQty,
     },
+    rechargeError:
+      account.lastRechargeError && account.lastRechargeErrorAt
+        ? { message: account.lastRechargeError, at: account.lastRechargeErrorAt }
+        : null,
     canDispatch: gate,
   };
 }

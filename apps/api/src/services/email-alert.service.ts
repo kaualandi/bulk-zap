@@ -17,6 +17,8 @@ function getClient(): Resend | null {
 
 type AlertInput = {
   accountId: string | null;
+  /** Org-level alerts (sem conta, ex.: billing) passam o org direto. */
+  organizationId?: string | null;
   eventType: string;
   subject: string;
   text: string;
@@ -36,11 +38,10 @@ export async function sendAlert(input: AlertInput): Promise<void> {
     return;
   }
 
-  // Alerts are account-scoped: only notify subscriptions in the account's org.
-  // Without an accountId we cannot attribute an org, so skip (no global fan-out
-  // across tenants).
-  let organizationId: string | null = null;
-  if (input.accountId) {
+  // Alerts são escopados por org: ou o org vem direto (alertas de billing), ou
+  // resolvemos pela conta. Sem org atribuível, pulamos (sem fan-out cross-tenant).
+  let organizationId: string | null = input.organizationId ?? null;
+  if (!organizationId && input.accountId) {
     const [acc] = await db
       .select({ organizationId: whatsappAccounts.organizationId })
       .from(whatsappAccounts)

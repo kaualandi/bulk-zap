@@ -130,6 +130,13 @@ export const creditAccounts = pgTable("credit_accounts", {
   cardLast4: text("card_last4"),
   cardBrand: text("card_brand"),
 
+  // Última falha de auto-recarga (cartão recusado / erro). null = sem falha
+  // pendente. Surface na UI pra a recarga NÃO falhar em silêncio.
+  lastRechargeError: text("last_recharge_error"),
+  lastRechargeErrorAt: timestamp("last_recharge_error_at", {
+    withTimezone: true,
+  }),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

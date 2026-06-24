@@ -214,6 +214,16 @@ function BillingInner() {
         </div>
       )}
 
+      {status?.rechargeError && (
+        <div className="mb-6">
+          <Alert tone="danger" title="Auto-recarga falhou">
+            Não conseguimos cobrar seu cartão ({status.rechargeError.message}).
+            Atualize o cartão abaixo ou adicione créditos manualmente para não
+            ficar sem saldo.
+          </Alert>
+        </div>
+      )}
+
       {/* Current subscription + usage */}
       <Card className="mb-8">
         <CardHeader

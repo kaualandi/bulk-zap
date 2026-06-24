@@ -160,6 +160,8 @@ export type BillingStatus = {
     threshold: number | null;
     packageQty: number;
   };
+  // Última falha de auto-recarga (cartão recusado/erro), se pendente.
+  rechargeError: { message: string; at: string } | null;
   canDispatch: {
     allowed: boolean;
     reason?: string;
