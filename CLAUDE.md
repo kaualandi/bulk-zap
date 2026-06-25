@@ -284,7 +284,7 @@ Padrão visual: linha "Termos: A · B · C ·  ..." logo abaixo do `<PageHeader>
 
 4. **PM2 em prod, não Docker**: o cliente quer apps nativos na EC2. Postgres e Redis via `apt install`, apps via `pm2 start ecosystem.config.js`.
 
-5. **Validação pool×grupo é gate**: nunca permita campanha em grupos sair de `draft` se algum número do pool não for membro de algum grupo alvo. Anti-ban é avisos; isso é hard block.
+5. **Validação pool×grupo é gate**: nunca permita disparar em grupos se algum número do pool não for membro de algum grupo alvo. Anti-ban é avisos; isso é hard block. **Enforcement:** `assertPoolGroupMembership` é chamado em `launchCampaign` (`campaign.service.ts`), que lança `PoolGroupValidationError` → o route `/campaigns/:id/launch` devolve **422** com os pares faltantes. A rota `GET /campaigns/:id/validate` só **reporta** a matriz pra UI — NÃO confie nela como gate (já houve bug: o launch não chamava a validação, só a rota `/validate`; o front podia ignorar e disparar em grupo não-membro).
 
 6. **Cloud API NÃO faz grupos**: nem tente. UI esconde features de grupo se driver=`cloud_api`. Para o caso de uso principal (cliente atual), Baileys é o único caminho.
 

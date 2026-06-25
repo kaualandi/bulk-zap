@@ -131,6 +131,29 @@ export async function addCredits(
     .update(creditAccounts)
     .set({
       balance: sql`${creditAccounts.balance} + ${dispatches}`,
+      // Saldo recarregado (auto ou manual) limpa qualquer falha pendente.
+      lastRechargeError: null,
+      lastRechargeErrorAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(creditAccounts.organizationId, orgId));
+}
+
+/**
+ * Record an auto-recharge failure (card declined / error) on the account and
+ * release the lock. Surfaced in the billing status/UI so the recharge does NOT
+ * fail silently — the org sees it must fix the card or buy credits manually.
+ */
+export async function recordRechargeFailure(
+  orgId: string,
+  message: string
+): Promise<void> {
+  await db
+    .update(creditAccounts)
+    .set({
+      lastRechargeError: message,
+      lastRechargeErrorAt: new Date(),
+      rechargePending: false,
       updatedAt: new Date(),
     })
     .where(eq(creditAccounts.organizationId, orgId));
@@ -190,7 +213,7 @@ export async function clearSavedCard(orgId: string): Promise<void> {
  * it flips `rechargePending` to true ONLY when every condition holds, so at most
  * one job is enqueued per low-balance episode (BullMQ jobId dedups further).
  */
-async function maybeTriggerAutoRecharge(orgId: string): Promise<void> {
+export async function maybeTriggerAutoRecharge(orgId: string): Promise<void> {
   const claimed = await db
     .update(creditAccounts)
     .set({ rechargePending: true, updatedAt: new Date() })
@@ -312,13 +335,25 @@ export async function canDispatch(orgId: string): Promise<CanDispatchResult> {
   return { allowed: false, reason: "quota_exceeded" };
 }
 
+/** A Drizzle executor: the base `db` or a transaction handle from `db.transaction`. */
+type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
- * Atomically increment the current-period dispatch counter and debit credits for
- * the portion that lands beyond the plan's franchise. The overage count is also
- * tracked in `overageDispatches` for the UI/reports. Triggers auto-recharge when
- * the resulting balance dips below the configured threshold.
+ * Increment the current-period dispatch counter and debit credits for the
+ * portion beyond the plan's franchise.
+ *
+ * IMPORTANT for billing integrity: pass `opts.exec` to run the counter/debit
+ * inside the SAME transaction that marks the message `sent`, so you can never
+ * have a "sent but not counted" message after a crash. When running inside a
+ * caller transaction, pass `deferAutoRecharge: true` and trigger auto-recharge
+ * AFTER the transaction commits (don't enqueue work that a rollback would undo).
  */
-export async function recordDispatch(orgId: string, n = 1): Promise<void> {
+export async function recordDispatch(
+  orgId: string,
+  n = 1,
+  opts: { exec?: Executor; deferAutoRecharge?: boolean } = {}
+): Promise<void> {
+  const exec = opts.exec ?? db;
   const active = await getActiveSubscription(orgId);
   const included = active?.plan.includedDispatches ?? 0;
   const usage = await getOrCreateCurrentUsage(orgId);
@@ -328,7 +363,7 @@ export async function recordDispatch(orgId: string, n = 1): Promise<void> {
   const after = before + n;
   const overageDelta = Math.max(0, after - Math.max(included, before));
 
-  await db
+  await exec
     .update(dispatchUsage)
     .set({
       dispatchCount: sql`${dispatchUsage.dispatchCount} + ${n}`,
@@ -339,14 +374,14 @@ export async function recordDispatch(orgId: string, n = 1): Promise<void> {
 
   // Debit non-expiring credits for the overage portion (floored at 0).
   if (overageDelta > 0) {
-    await db
+    await exec
       .update(creditAccounts)
       .set({
         balance: sql`GREATEST(${creditAccounts.balance} - ${overageDelta}, 0)`,
         updatedAt: new Date(),
       })
       .where(eq(creditAccounts.organizationId, orgId));
-    await maybeTriggerAutoRecharge(orgId);
+    if (!opts.deferAutoRecharge) await maybeTriggerAutoRecharge(orgId);
   }
 }
 
@@ -376,6 +411,8 @@ export type BillingStatus = {
     threshold: number | null;
     packageQty: number;
   };
+  /** Última falha de auto-recarga (cartão recusado/erro), se pendente. */
+  rechargeError: { message: string; at: Date } | null;
   canDispatch: CanDispatchResult;
 };
 
@@ -416,6 +453,10 @@ export async function getBillingStatus(orgId: string): Promise<BillingStatus> {
       threshold: account.autoRechargeThreshold,
       packageQty: account.autoRechargePackageQty,
     },
+    rechargeError:
+      account.lastRechargeError && account.lastRechargeErrorAt
+        ? { message: account.lastRechargeError, at: account.lastRechargeErrorAt }
+        : null,
     canDispatch: gate,
   };
 }

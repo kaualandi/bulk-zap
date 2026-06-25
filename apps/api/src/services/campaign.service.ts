@@ -21,6 +21,7 @@ import {
 import { renderTemplate } from "./template-render.service.js";
 import { sendMessageQueue } from "../jobs/queue.js";
 import { getDriver } from "./account-manager.service.js";
+import { assertPoolGroupMembership } from "./group-validation.service.js";
 import { logger } from "../logger.js";
 
 export type CreateCampaignInput = {
@@ -213,6 +214,15 @@ export async function launchCampaign(
     )
     .limit(1);
   if (!template) throw new Error("template not found");
+
+  // HARD GATE (anti-ban): never dispatch in a group where a pool number is not a
+  // member — sending to a non-member group fails per-target and is a ban signal.
+  // Throws PoolGroupValidationError; no-op for contact lists.
+  await assertPoolGroupMembership(
+    campaign.listId,
+    campaign.accountPoolIds,
+    organizationId
+  );
 
   const targets = await loadTargets(campaign.listId, organizationId);
   if (targets.length === 0) {
